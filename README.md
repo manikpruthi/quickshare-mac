@@ -6,6 +6,10 @@ Built on the public-domain protocol core from [NearDrop](https://github.com/gris
 
 ![Send window](docs/screenshots/send-window.png)
 
+*The QR code above is captured from the real Send window. Its key is ephemeral — QuickShare-Mac
+generates a fresh key every time the window opens, so a key in any static screenshot is illustrative
+and will no longer connect.*
+
 ## Features
 
 - **Receive mode toggle** — one click makes the Mac discoverable in any nearby Android phone's Quick Share sheet.
