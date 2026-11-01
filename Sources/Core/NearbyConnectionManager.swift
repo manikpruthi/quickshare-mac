@@ -198,9 +198,13 @@ public class NearbyConnectionManager : NSObject, NetServiceDelegate, InboundNear
 	private static let discoveryTimeout:TimeInterval=120
 	private static let staleSweepInterval:TimeInterval=5
 	private static let staleDeviceTTL:TimeInterval=12
+	private static let liveProbeTimeout:TimeInterval=4
+	// Longest a live device can go without a refreshed lastSeen: TTL, then up to one sweep tick, then the probe itself.
+	private static let staleSendWindow:TimeInterval=staleDeviceTTL+staleSweepInterval+liveProbeTimeout
 
 	private var browser:NWBrowser?
 	private var staleSweepTimer:DispatchSourceTimer?
+	private var probingDevices:Set<String>=[]
 
 	private var qrCodePublicKey:ECPublicKey?
 	private var qrCodePrivateKey:ECPrivateKey?
@@ -372,21 +376,62 @@ public class NearbyConnectionManager : NSObject, NetServiceDelegate, InboundNear
 		staleSweepTimer=nil
 	}
 
+	// NWBrowser only reports changes, so a phone that keeps advertising unchanged never refreshes
+	// lastSeen. Instead of evicting on age alone, probe devices past the TTL and drop only unreachable ones.
 	private func sweepStaleDevices(){
 		let cutoff=Date().addingTimeInterval(-NearbyConnectionManager.staleDeviceTTL)
 		stateLock.lock()
-		var expired:[String]=[]
-		for (id, info) in foundServices where info.lastSeen<cutoff{
-			expired.append(id)
-		}
-		for id in expired{
-			foundServices.removeValue(forKey: id)
+		var due:[(String, NWEndpoint)]=[]
+		for (id, info) in foundServices where info.lastSeen<cutoff && !probingDevices.contains(id){
+			probingDevices.insert(id)
+			due.append((id, info.service.endpoint))
 		}
 		stateLock.unlock()
-		for id in expired{
-			for delegate in liveDelegates(){
-				delegate.removeDevice(id: id)
+		for (id, endpoint) in due{
+			probeLiveness(endpointID: id, endpoint: endpoint)
+		}
+	}
+
+	private func probeLiveness(endpointID:String, endpoint:NWEndpoint){
+		let tcp=NWProtocolTCP.Options.init()
+		tcp.connectionTimeout=Int(NearbyConnectionManager.liveProbeTimeout)
+		let conn=NWConnection(to: endpoint, using: NWParameters(tls: .none, tcp: tcp))
+		let startedAt=Date()
+		var finished=false
+		let finish:(Bool)->Void={[weak self] alive in
+			guard !finished else {return}
+			finished=true
+			conn.cancel()
+			guard let self=self else {return}
+			self.stateLock.lock()
+			self.probingDevices.remove(endpointID)
+			var remove=false
+			if let info=self.foundServices[endpointID]{
+				if alive{
+					self.foundServices[endpointID]?.lastSeen=Date()
+				}else{
+					// Skip if the browser re-reported the device while we were probing.
+					remove=info.lastSeen<startedAt
+				}
 			}
+			self.stateLock.unlock()
+			if remove{
+				self.removeKnownDevice(endpointID: endpointID)
+			}
+		}
+		conn.stateUpdateHandler={state in
+			switch state{
+			case .ready:
+				finish(true)
+			case .failed, .cancelled:
+				finish(false)
+			default:
+				break
+			}
+		}
+		conn.start(queue: .main)
+		DispatchQueue.main.asyncAfter(deadline: .now()+NearbyConnectionManager.liveProbeTimeout){
+			finish(false)
 		}
 	}
 
@@ -608,7 +653,7 @@ public class NearbyConnectionManager : NSObject, NetServiceDelegate, InboundNear
 		stateLock.unlock()
 		guard let info else {return}
 		guard let device=info.device else {return}
-		guard let lastSeen=currentLastSeen(deviceID: deviceID), Date().timeIntervalSince(lastSeen)<NearbyConnectionManager.staleDeviceTTL else {
+		guard let lastSeen=currentLastSeen(deviceID: deviceID), Date().timeIntervalSince(lastSeen)<NearbyConnectionManager.staleSendWindow else {
 			removeKnownDevice(endpointID: deviceID)
 			DispatchQueue.main.async {
 				delegate.connectionFailed(with: NearbyError.protocolError("Device is no longer available — pick it again after it reappears."))

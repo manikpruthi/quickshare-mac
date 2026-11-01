@@ -103,6 +103,8 @@ finds them. Discovery stays live while the Send window is open: an `.added` resu
 arrive before the service's TXT `n` record, so `.changed` updates are applied too — a
 phone that becomes discoverable after the window opens shows up as soon as its TXT record
 lands. Our own endpoint ID and all-loopback results are filtered out to avoid listing the Mac itself.
+Because `NWBrowser` only reports changes, devices not re-announced for ~12 s get a short TCP
+reachability probe; reachable phones stay listed, unreachable ones are removed within ~20 s.
 
 Idle phones don't advertise (battery/privacy) — Android normally wakes them
 with a Bluetooth LE packet macOS cannot emit, so the QR/intent path

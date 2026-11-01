@@ -2,7 +2,7 @@
 
 ## Phone doesn't disappear from the list
 
-- The Send window sweeps the device list every 5 seconds and drops phones not seen for ~12 seconds. If you switch the phone to **contacts-only**, its advert stops and the row clears within ~15 seconds.
+- The Send window sweeps the device list every 5 seconds. Bonjour only reports changes, so a phone that hasn't been re-announced for ~12 seconds gets a quick TCP reachability probe (4 s timeout): if it answers it stays listed, if not it's dropped. Phones that are still nearby stay in the list for as long as they advertise; a phone that leaves, turns off Quick Share, or switches to **contacts-only** clears within ~20 seconds.
 - Tapping **Send** on a stale row fails immediately with "Device is no longer available" instead of hanging. If a transfer hangs longer than 30 seconds with no reply from the phone, it now fails with "Could not reach the phone" rather than sticking on "Connecting…".
 
 ## Phone doesn't see the Mac
