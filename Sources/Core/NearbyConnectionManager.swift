@@ -196,6 +196,8 @@ public class NearbyConnectionManager : NSObject, NetServiceDelegate, InboundNear
 
 	private static let maxFoundDevices=64
 	private static let discoveryTimeout:TimeInterval=120
+	private static let staleSweepInterval:TimeInterval=5
+	private static let staleDeviceTTL:TimeInterval=12
 
 	private var browser:NWBrowser?
 	private var staleSweepTimer:DispatchSourceTimer?
@@ -359,7 +361,7 @@ public class NearbyConnectionManager : NSObject, NetServiceDelegate, InboundNear
 	private func startStaleSweep(){
 		stopStaleSweep()
 		let timer=DispatchSource.makeTimerSource(queue: .main)
-		timer.schedule(deadline: .now()+15, repeating: 15)
+		timer.schedule(deadline: .now()+NearbyConnectionManager.staleSweepInterval, repeating: NearbyConnectionManager.staleSweepInterval)
 		timer.setEventHandler{[weak self] in self?.sweepStaleDevices()}
 		timer.resume()
 		staleSweepTimer=timer
@@ -371,7 +373,7 @@ public class NearbyConnectionManager : NSObject, NetServiceDelegate, InboundNear
 	}
 
 	private func sweepStaleDevices(){
-		let cutoff=Date().addingTimeInterval(-30)
+		let cutoff=Date().addingTimeInterval(-NearbyConnectionManager.staleDeviceTTL)
 		stateLock.lock()
 		var expired:[String]=[]
 		for (id, info) in foundServices where info.lastSeen<cutoff{
@@ -462,11 +464,11 @@ public class NearbyConnectionManager : NSObject, NetServiceDelegate, InboundNear
 		guard endpointID != String(bytes: self.endpointID, encoding: .ascii) else {return}
 
 		guard case let NWBrowser.Result.Metadata.bonjour(txtRecord)=service.metadata else {
-			touchDevice(endpointID: endpointID, service: service)
+			touchKnownService(endpointID: endpointID, service: service, device: nil)
 			return
 		}
 		guard let endpointInfoEncoded=txtRecord.dictionary["n"] else {
-			touchDevice(endpointID: endpointID, service: service)
+			touchKnownService(endpointID: endpointID, service: service, device: nil)
 			return
 		}
 		guard let endpointInfoSerialized=Data.dataFromUrlSafeBase64(endpointInfoEncoded) else {return}
@@ -475,6 +477,7 @@ public class NearbyConnectionManager : NSObject, NetServiceDelegate, InboundNear
 		stateLock.lock()
 		if var existing=foundServices[endpointID]{
 			existing.lastSeen=Date()
+			existing.service=service
 			if existing.device==nil, endpointInfo.name != nil{
 				stateLock.unlock()
 				_ = addFoundDevice(service: service, endpointInfo: endpointInfo, endpointID: endpointID)
@@ -499,7 +502,7 @@ public class NearbyConnectionManager : NSObject, NetServiceDelegate, InboundNear
 
 		if let qrData=endpointInfo.qrCodeData, let token=qrCodeAdvertisingToken, let encKey=qrCodeNameEncryptionKey{
 			if qrData==token{
-				if let deviceInfo{
+				if let deviceInfo=deviceInfo{
 					for delegate in liveDelegates(){
 						delegate.startTransferWithQrCode(device: deviceInfo)
 					}
@@ -539,26 +542,33 @@ public class NearbyConnectionManager : NSObject, NetServiceDelegate, InboundNear
 		return deviceInfo
 	}
 
-	private func touchDevice(endpointID:String, service:NWBrowser.Result){
+	private func touchKnownService(endpointID:String, service:NWBrowser.Result, device:RemoteDeviceInfo?){
 		stateLock.lock()
 		if foundServices[endpointID] != nil{
 			foundServices[endpointID]?.lastSeen=Date()
 			foundServices[endpointID]?.service=service
+			if let device=device{
+				foundServices[endpointID]?.device=device
+			}
 		}
 		stateLock.unlock()
 	}
 
-	private func maybeRemoveFoundDevice(service:NWBrowser.Result){
-		guard let endpointID=endpointID(for: service) else {return}
+	private func removeKnownDevice(endpointID:String){
 		stateLock.lock()
 		guard foundServices.removeValue(forKey: endpointID) != nil else {
 			stateLock.unlock()
 			return
 		}
 		stateLock.unlock()
-		for delegate in liveDelegates() {
+		for delegate in liveDelegates(){
 			delegate.removeDevice(id: endpointID)
 		}
+	}
+
+	private func maybeRemoveFoundDevice(service:NWBrowser.Result){
+		guard let endpointID=endpointID(for: service) else {return}
+		removeKnownDevice(endpointID: endpointID)
 	}
 
 	public func generateQrCodeKey() -> String{
@@ -586,12 +596,25 @@ public class NearbyConnectionManager : NSObject, NetServiceDelegate, InboundNear
 		qrCodeData=nil
 	}
 
+	private func currentLastSeen(deviceID:String)->Date?{
+		stateLock.lock()
+		defer{stateLock.unlock()}
+		return foundServices[deviceID]?.lastSeen
+	}
+
 	public func startOutgoingTransfer(deviceID:String, delegate:ShareExtensionDelegate, urls:[URL]){
 		stateLock.lock()
 		let info=foundServices[deviceID]
 		stateLock.unlock()
 		guard let info else {return}
 		guard let device=info.device else {return}
+		guard let lastSeen=currentLastSeen(deviceID: deviceID), Date().timeIntervalSince(lastSeen)<NearbyConnectionManager.staleDeviceTTL else {
+			removeKnownDevice(endpointID: deviceID)
+			DispatchQueue.main.async {
+				delegate.connectionFailed(with: NearbyError.protocolError("Device is no longer available — pick it again after it reappears."))
+			}
+			return
+		}
 		let tcp=NWProtocolTCP.Options.init()
 		tcp.noDelay=true
 		let nwconn=NWConnection(to: info.service.endpoint, using: NWParameters(tls: .none, tcp: tcp))

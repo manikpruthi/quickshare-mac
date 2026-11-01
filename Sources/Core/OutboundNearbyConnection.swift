@@ -18,6 +18,8 @@ class OutboundNearbyConnection:NearbyConnection{
 	private var totalBytesToSend:Int64=0
 	private var totalBytesSent:Int64=0
 	private var cancelled:Bool=false
+	private var didCancel:Bool=false
+	private var connectWatchdog:DispatchWorkItem?
 	private var textPayloadID:Int64=0
 
 	public var qrCodePrivateKey:ECPrivateKey?
@@ -47,6 +49,7 @@ class OutboundNearbyConnection:NearbyConnection{
 
 	public func cancel(){
 		cancelled=true
+		didCancel=true
 		if encryptionDone{
 			var cancel=Sharing_Nearby_Frame()
 			cancel.version = .v1
@@ -72,6 +75,7 @@ class OutboundNearbyConnection:NearbyConnection{
 
 	override func connectionReady() {
 		super.connectionReady()
+		scheduleConnectWatchdog()
 		do{
 			try sendConnectionRequest()
 			try sendUkey2ClientInit()
@@ -79,6 +83,22 @@ class OutboundNearbyConnection:NearbyConnection{
 			lastError=error
 			protocolError()
 		}
+	}
+
+	private func scheduleConnectWatchdog(){
+		cancelConnectWatchdog()
+		let item=DispatchWorkItem{[weak self] in
+			guard let self=self else {return}
+			self.lastError=NearbyError.protocolError("Could not reach the phone — it may have gone offline. Pick it again after it reappears.")
+			self.protocolError()
+		}
+		connectWatchdog=item
+		DispatchQueue.main.asyncAfter(deadline: .now()+30, execute: item)
+	}
+
+	private func cancelConnectWatchdog(){
+		connectWatchdog?.cancel()
+		connectWatchdog=nil
 	}
 
 	override func isServer() -> Bool {
@@ -131,8 +151,12 @@ class OutboundNearbyConnection:NearbyConnection{
 
 	override func protocolError() {
 		super.protocolError()
+		cancelConnectWatchdog()
 		closeQueuedHandles()
-		delegate?.outboundConnection(connection: self, failedWithError: lastError ?? NearbyError.protocolError("unknown"))
+		if !didCancel{
+			didCancel=true
+			delegate?.outboundConnection(connection: self, failedWithError: lastError ?? NearbyError.protocolError("unknown"))
+		}
 	}
 
 	private func sendConnectionRequest() throws {
@@ -233,6 +257,7 @@ class OutboundNearbyConnection:NearbyConnection{
 		guard frame.version == .v1 else {throw NearbyError.protocolError("Unexpected offline frame version \(frame.version)")}
 		guard frame.v1.type == .connectionResponse else {throw NearbyError.protocolError("Unexpected frame type \(frame.v1.type)")}
 		guard frame.v1.connectionResponse.response == .accept else {throw NearbyError.protocolError("Connection was rejected by recipient")}
+		cancelConnectWatchdog()
 
 		var pairedEncryption=Sharing_Nearby_Frame()
 		pairedEncryption.version = .v1
