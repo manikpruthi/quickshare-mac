@@ -25,13 +25,13 @@ if args.contains("--receive-test") {
 
 if args.contains("--help") || args.contains("-h") {
     print("""
-    QuickShare — Mac <> Android file transfer (Quick Share)
+    QuickShare-Mac — Mac <> Android file transfer (Quick Share)
 
     Usage:
-      QuickShare              Launch menu-bar app
-      QuickShare --self-test  Run protocol unit tests
-      QuickShare --receive-test [secs]  Advertise and log inbound connections
-      QuickShare --help       This help
+      QuickShare-Mac              Launch menu-bar app
+      QuickShare-Mac --self-test  Run protocol unit tests
+      QuickShare-Mac --receive-test [secs]  Advertise and log inbound connections
+      QuickShare-Mac --help       This help
     """)
     exit(0)
 }

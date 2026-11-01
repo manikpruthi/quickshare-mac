@@ -42,6 +42,9 @@ final class SendController: NSObject, NSTableViewDataSource, NSTableViewDelegate
     private var qrImageView: NSImageView!
     private var qrLinkField: NSTextField!
     private var qrURL: String = ""
+    private var sendButton: NSButton?
+    private var cancelButton: NSButton?
+    private var doneButton: NSButton?
 
     static func show() {
         NSApp.setActivationPolicy(.regular)
@@ -117,16 +120,23 @@ final class SendController: NSObject, NSTableViewDataSource, NSTableViewDelegate
         scroll.documentView = tableView
         content.addSubview(scroll)
 
-        let sendButton = NSButton(title: "Send", target: self, action: #selector(send))
-        sendButton.frame = NSRect(x: 20, y: 312, width: 150, height: 32)
-        sendButton.bezelStyle = .rounded
-        sendButton.keyEquivalent = "\r"
-        content.addSubview(sendButton)
+        sendButton = NSButton(title: "Send", target: self, action: #selector(send))
+        sendButton?.frame = NSRect(x: 20, y: 312, width: 150, height: 32)
+        sendButton?.bezelStyle = .rounded
+        sendButton?.keyEquivalent = "\r"
+        content.addSubview(sendButton!)
 
-        let cancelButton = NSButton(title: "Cancel", target: self, action: #selector(cancelTransfer))
-        cancelButton.frame = NSRect(x: 180, y: 312, width: 110, height: 32)
-        cancelButton.bezelStyle = .rounded
-        content.addSubview(cancelButton)
+        cancelButton = NSButton(title: "Cancel", target: self, action: #selector(cancelTransfer))
+        cancelButton?.frame = NSRect(x: 180, y: 312, width: 110, height: 32)
+        cancelButton?.bezelStyle = .rounded
+        content.addSubview(cancelButton!)
+
+        doneButton = NSButton(title: "Done", target: self, action: #selector(done))
+        doneButton?.frame = NSRect(x: 20, y: 312, width: 150, height: 32)
+        doneButton?.bezelStyle = .rounded
+        doneButton?.keyEquivalent = "\r"
+        doneButton?.isHidden = true
+        content.addSubview(doneButton!)
 
         pinLabel = NSTextField(labelWithString: "")
         pinLabel.frame = NSRect(x: 20, y: 282, width: 440, height: 24)
@@ -368,10 +378,20 @@ final class SendController: NSObject, NSTableViewDataSource, NSTableViewDelegate
 
     func transferFinished() {
         DispatchQueue.main.async {
+            self.progressBar.stopAnimation(nil)
+            self.progressBar.isIndeterminate = false
             self.progressBar.doubleValue = 100
             self.pinLabel.stringValue = ""
             self.currentDeviceID = nil
-            self.setStatus("Sent — files delivered")
+            self.setStatus("Complete — files delivered to the Android phone")
+            self.sendButton?.isHidden = true
+            self.cancelButton?.isHidden = true
+            self.doneButton?.isHidden = false
+            self.window?.makeFirstResponder(self.doneButton)
         }
+    }
+
+    @objc private func done() {
+        SendController.closeWindow()
     }
 }

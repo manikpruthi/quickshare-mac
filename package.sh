@@ -3,8 +3,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 VERSION="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Resources/Info.plist)"
-APP_NAME="QuickShare"
-BUILD_DIR="${QUICKSHARE_BUILD_DIR:-$HOME/Library/Caches/QuickShareBuild}"
+APP_NAME="QuickShare-Mac"
+BUILD_DIR="${QUICKSHARE_MAC_BUILD_DIR:-$HOME/Library/Caches/QuickShareMacBuild}"
 RELEASE_DIR="release"
 APP="$BUILD_DIR/$APP_NAME.app"
 
@@ -17,11 +17,11 @@ STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 ditto "$APP" "$STAGE/$APP_NAME.app"
 ditto -c -k --norsrc --noextattr --keepParent "$STAGE/$APP_NAME.app" \
-    "$RELEASE_DIR/QuickShare-$VERSION.zip"
+    "$RELEASE_DIR/QuickShare-Mac-$VERSION.zip"
 
 ln -s /Applications "$STAGE/Applications"
 hdiutil create -volname "$APP_NAME" -srcfolder "$STAGE" -ov -format UDZO \
-    "$RELEASE_DIR/QuickShare-$VERSION.dmg" >/dev/null
+    "$RELEASE_DIR/QuickShare-Mac-$VERSION.dmg" >/dev/null
 rm -rf "$STAGE"
 trap - EXIT
 touch "$RELEASE_DIR/.metadata_never_index"

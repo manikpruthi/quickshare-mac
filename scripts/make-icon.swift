@@ -1,8 +1,10 @@
 import AppKit
 
-let outputDir = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "Resources/QuickShare.iconset"
+let outputDir = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "Resources/QuickShare-Mac.iconset"
 try? FileManager.default.createDirectory(atPath: outputDir, withIntermediateDirectories: true)
 
+// Matches the menu-bar icon: arrow.left.arrow.right.circle — two opposing
+// arrows inside a circle, drawn in the same blue family.
 func makeIcon(pixels: Int) -> Data? {
     guard let rep = NSBitmapImageRep(
         bitmapDataPlanes: nil,
@@ -26,37 +28,42 @@ func makeIcon(pixels: Int) -> Data? {
     NSColor.clear.setFill()
     bounds.fill()
 
-    let back = NSBezierPath(
-        roundedRect: NSRect(x: s * 0.06, y: s * 0.18, width: s * 0.88, height: s * 0.58),
-        xRadius: s * 0.07,
-        yRadius: s * 0.07
-    )
-    NSColor(srgbRed: 0.13, green: 0.55, blue: 0.85, alpha: 1).setFill()
-    back.fill()
+    let blue = NSColor(srgbRed: 0.13, green: 0.55, blue: 0.85, alpha: 1)
+    let deepBlue = NSColor(srgbRed: 0.08, green: 0.42, blue: 0.70, alpha: 1)
 
-    let tab = NSBezierPath(
-        roundedRect: NSRect(x: s * 0.06, y: s * 0.62, width: s * 0.40, height: s * 0.20),
-        xRadius: s * 0.06,
-        yRadius: s * 0.06
-    )
-    NSColor(srgbRed: 0.20, green: 0.60, blue: 0.90, alpha: 1).setFill()
-    tab.fill()
+    let circle = NSBezierPath(ovalIn: NSRect(x: s * 0.06, y: s * 0.06, width: s * 0.88, height: s * 0.88))
+    let gradient = NSGradient(colors: [blue, deepBlue])
+    gradient?.draw(in: circle, angle: -90)
+    blue.setStroke()
+    circle.lineWidth = max(1, s * 0.012)
+    circle.stroke()
 
-    let front = NSBezierPath(
-        roundedRect: NSRect(x: s * 0.06, y: s * 0.14, width: s * 0.88, height: s * 0.52),
-        xRadius: s * 0.06,
-        yRadius: s * 0.06
-    )
-    NSColor(srgbRed: 0.30, green: 0.68, blue: 0.95, alpha: 1).setFill()
-    front.fill()
+    NSColor.white.setFill()
+    let barH = s * 0.11
+    let arrowLen = s * 0.52
+    let headW = s * 0.16
+    let headH = s * 0.24
+    let cx = s * 0.5
 
-    let highlight = NSBezierPath(
-        roundedRect: NSRect(x: s * 0.10, y: s * 0.16, width: s * 0.80, height: s * 0.08),
-        xRadius: s * 0.03,
-        yRadius: s * 0.03
-    )
-    NSColor(srgbRed: 0.45, green: 0.78, blue: 1.0, alpha: 0.75).setFill()
-    highlight.fill()
+    let rightBar = NSBezierPath(rect: NSRect(x: cx - arrowLen / 2, y: s * 0.60 - barH / 2, width: arrowLen, height: barH))
+    rightBar.fill()
+    let rightHead = NSBezierPath()
+    let rx = cx + arrowLen / 2
+    rightHead.move(to: NSPoint(x: rx + headW, y: s * 0.60))
+    rightHead.line(to: NSPoint(x: rx, y: s * 0.60 + headH / 2))
+    rightHead.line(to: NSPoint(x: rx, y: s * 0.60 - headH / 2))
+    rightHead.close()
+    rightHead.fill()
+
+    let leftBar = NSBezierPath(rect: NSRect(x: cx - arrowLen / 2, y: s * 0.40 - barH / 2, width: arrowLen, height: barH))
+    leftBar.fill()
+    let leftHead = NSBezierPath()
+    let lx = cx - arrowLen / 2
+    leftHead.move(to: NSPoint(x: lx - headW, y: s * 0.40))
+    leftHead.line(to: NSPoint(x: lx, y: s * 0.40 + headH / 2))
+    leftHead.line(to: NSPoint(x: lx, y: s * 0.40 - headH / 2))
+    leftHead.close()
+    leftHead.fill()
 
     NSGraphicsContext.restoreGraphicsState()
     return rep.representation(using: .png, properties: [:])

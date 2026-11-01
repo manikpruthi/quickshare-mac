@@ -1,4 +1,4 @@
-# QuickShare
+# QuickShare-Mac
 
 A native macOS menu-bar app for file transfer with Android phones over Quick Share (Nearby Share). No app to install on the phone — the Mac appears in Android's built-in share sheet, and the Mac can send files back the same way.
 
@@ -30,33 +30,33 @@ Built on the public-domain protocol core from [NearDrop](https://github.com/gris
 
 ### Easy mode — use the prebuilt DMG (no Xcode needed)
 
-1. Download **[`release/QuickShare-1.0.0.dmg`](release/QuickShare-1.0.0.dmg)**
+1. Download **[`release/QuickShare-Mac-1.0.0.dmg`](release/QuickShare-Mac-1.0.0.dmg)**
    (universal: Apple Silicon and Intel).
 2. Double-click the DMG to mount it.
-3. Drag **QuickShare.app** onto the **Applications** shortcut in the window.
-4. Open **Applications**, then **right-click QuickShare.app → Open** and confirm
+3. Drag **QuickShare-Mac.app** onto the **Applications** shortcut in the window.
+4. Open **Applications**, then **right-click QuickShare-Mac.app → Open** and confirm
    **Open** on the warning. (The app is ad-hoc signed, not notarized, so macOS blocks a plain
    double-click on first launch.)
    - If the prompt only offers **Done** / no **Open** button, use
      **System Settings → Privacy & Security → Open Anyway** instead.
 5. Grant **Local Network** access when asked — see [Local Network](#local-network).
 
-To eject the installer afterward, click the eject icon beside *QuickShare* in Finder’s sidebar.
+To eject the installer afterward, click the eject icon beside *QuickShare-Mac* in Finder’s sidebar.
 
 ### Build from source
 
 ```bash
-./build.sh                  # Debug build -> "$HOME/Library/Caches/QuickShareBuild/QuickShare.app"
+./build.sh                  # Debug build -> "$HOME/Library/Caches/QuickShareBuild/QuickShare-Mac.app"
 ./build.sh release          # Optimized Release build
-open "$HOME/Library/Caches/QuickShareBuild/QuickShare.app"
+open "$HOME/Library/Caches/QuickShareBuild/QuickShare-Mac.app"
 ./package.sh                # Release build + DMG and ZIP under release/
 ```
 
-CLI builds go to `~/Library/Caches/QuickShareBuild` so Spotlight and the macOS Apps view don't
-list a second copy alongside the installed app. Set `QUICKSHARE_BUILD_DIR` to override it.
-`package.sh` writes `release/QuickShare-1.0.0.dmg` and `release/QuickShare-1.0.0.zip`; both
+CLI builds go to `~/Library/Caches/QuickShareMacBuild` so Spotlight and the macOS Apps view don't
+list a second copy alongside the installed app. Set `QUICKSHARE_MAC_BUILD_DIR` to override it.
+`package.sh` writes `release/QuickShare-Mac-1.0.0.dmg` and `release/QuickShare-Mac-1.0.0.zip`; both
 are committed to the repo so the DMG route above works without building anything. The app is
-unsigned. On first launch, right-click **QuickShare.app → Open**, or allow it under
+unsigned. On first launch, right-click **QuickShare-Mac.app → Open**, or allow it under
 **System Settings → Privacy & Security → Open Anyway**.
 
 There is no Xcode project; `build.sh` (SwiftPM + `swiftc` assembly) is the canonical
@@ -64,7 +64,7 @@ build for machines with only the Command Line Tools.
 
 ### Local Network
 
-macOS asks the first time QuickShare advertises or browses. Grant access in
+macOS asks the first time QuickShare-Mac advertises or browses. Grant access in
 **System Settings → Privacy & Security → Local Network**. Receiving needs
 `NSBonjourServices` `_FC9F5ED42C8A._tcp` (declared in `Resources/Info.plist`); without
 it the Mac stays invisible to phones.
@@ -74,18 +74,18 @@ it the Mac stays invisible to phones.
 | Action | How |
 | --- | --- |
 | Receive from Android | Menu bar → **Receive Mode: ON**, then on the phone: Gallery/Files → Share → Quick Share → your Mac → match the PIN → Accept on the Mac |
-| Send to Android | Menu bar → **Send to Android…** → Choose Files → pick the phone (open Quick Share on the phone first, or scan the QR code) → Accept on the phone |
-| QR-code wake | In the Send window → **Show QR Code** → scan with the phone camera |
+| Send to Android | Menu bar → **Send to Android…** → Choose Files → pick the phone (open Quick Share on the phone first, or scan the QR code) → Accept on the phone → **Done** closes the window |
+| QR-code wake | Scan the QR code shown in the Send window (regenerates every open), or Copy Link |
 | Stop advertising | Menu bar → **Receive Mode: OFF** |
 | From mac-explorer | Right-click a file → **Quick Share** (or Share submenu) |
-| From Finder | Right-click → Share → QuickShare (once the app has run once) |
-| Headless checks | `QuickShare --self-test`, `QuickShare --receive-test [secs]`, `QuickShare --screenshot out.png` |
+| From Finder | Right-click → Share → QuickShare-Mac (once the app has run once) |
+| Headless checks | `QuickShare-Mac --self-test`, `QuickShare-Mac --receive-test [secs]`, `QuickShare-Mac --screenshot out.png` |
 
 Files received land in Downloads with automatic de-duplication (`name (1).ext`).
 
 ## How it works
 
-QuickShare speaks the reverse-engineered Nearby Share / Quick Share wire protocol:
+QuickShare-Mac speaks the reverse-engineered Nearby Share / Quick Share wire protocol:
 ephemeral `NWListener` + `NetService` advertisement on `_FC9F5ED42C8A._tcp` (name = PCP
 `0x23` + 4-byte endpoint ID + service hash; TXT `n` = version/visibility/device-type +
 hostname), UKEY2 handshake (`P-256_SHA512`, `AES_256_CBC-HMAC_SHA256`), then paired-key,
@@ -116,7 +116,7 @@ Release build, one process (macOS `footprint`, the metric behind Activity Monito
 memory column):
 
 ```bash
-footprint "$(pgrep -x QuickShare | head -1)" | grep phys_footprint
+footprint "$(pgrep -x QuickShare-Mac | head -1)" | grep phys_footprint
 ```
 
 Measured: menu-bar idle with modes OFF ≈ single-digit MB; receive-ON idle ≈ menu-bar
@@ -132,9 +132,9 @@ connection buffer (512 KB chunks) + bounded protobuf frames. Techniques used:
 ## Verification
 
 ```bash
-APP="$HOME/Library/Caches/QuickShareBuild/QuickShare.app/Contents/MacOS/QuickShare"
+APP="$HOME/Library/Caches/QuickShareMacBuild/QuickShare-Mac.app/Contents/MacOS/QuickShare-Mac"
 
-# 9 protocol/crypto/handshake assertions, incl. full client+server loopback
+# 10 protocol/crypto/handshake assertions, incl. full client+server loopback
 "$APP" --self-test
 
 # Advertise for N seconds (check from the phone's Quick Share sheet)

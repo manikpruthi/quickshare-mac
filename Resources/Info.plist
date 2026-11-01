@@ -5,17 +5,17 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleExecutable</key>
-    <string>QuickShare</string>
+    <string>QuickShare-Mac</string>
     <key>CFBundleIdentifier</key>
     <string>tools.macexplorer.quickshare</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>QuickShare</string>
+    <string>QuickShare-Mac</string>
     <key>CFBundleIconFile</key>
-    <string>QuickShare</string>
+    <string>QuickShare-Mac</string>
     <key>CFBundleDisplayName</key>
-    <string>QuickShare</string>
+    <string>QuickShare-Mac</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

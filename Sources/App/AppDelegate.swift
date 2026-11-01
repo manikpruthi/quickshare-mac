@@ -14,11 +14,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem?.button {
             button.image = NSImage(systemSymbolName: "arrow.left.arrow.right.circle", accessibilityDescription: "QuickShare")
-            button.toolTip = "QuickShare — Mac <> Android"
+            button.toolTip = "QuickShare-Mac — Mac <> Android"
         }
 
         let menu = NSMenu()
-        let title = NSMenuItem(title: "QuickShare", action: nil, keyEquivalent: "")
+        let title = NSMenuItem(title: "QuickShare-Mac", action: nil, keyEquivalent: "")
         title.isEnabled = false
         menu.addItem(title)
         menu.addItem(.separator())
@@ -40,7 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusLine = status
 
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Quit QuickShare", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        menu.addItem(NSMenuItem(title: "Quit QuickShare-Mac", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem?.menu = menu
     }
 

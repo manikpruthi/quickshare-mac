@@ -2,9 +2,9 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-APP_NAME="QuickShare"
-BUNDLE_NAME="QuickShare"
-BUILD_DIR="${QUICKSHARE_BUILD_DIR:-$HOME/Library/Caches/QuickShareBuild}"
+APP_NAME="QuickShare-Mac"
+BUNDLE_NAME="QuickShare-Mac"
+BUILD_DIR="${QUICKSHARE_MAC_BUILD_DIR:-$HOME/Library/Caches/QuickShareMacBuild}"
 APP="$BUILD_DIR/$BUNDLE_NAME.app"
 MODE="${1:-debug}"
 
@@ -21,13 +21,13 @@ echo "Building Swift package ($SPM_CONFIG)..."
 swift build -c "$SPM_CONFIG" 2>&1 | tail -3
 
 # 2. assemble .app around the SPM binary
-BIN="$(swift build -c "$SPM_CONFIG" --show-bin-path)/QuickShare"
+BIN="$(swift build -c "$SPM_CONFIG" --show-bin-path)/QuickShare-Mac"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/$APP_NAME"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
-if [ -f Resources/QuickShare.icns ]; then
-    cp Resources/QuickShare.icns "$APP/Contents/Resources/QuickShare.icns"
+if [ -f Resources/QuickShare-Mac.icns ]; then
+    cp Resources/QuickShare-Mac.icns "$APP/Contents/Resources/QuickShare-Mac.icns"
 fi
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
