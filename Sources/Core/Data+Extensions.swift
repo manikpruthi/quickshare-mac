@@ -29,9 +29,11 @@ extension Data{
 	}
 	
 	static func randomData(length: Int) -> Data{
+		guard length>0 else {return Data()}
 		var data=Data(count: length)
 		data.withUnsafeMutableBytes {
-			guard 0 == SecRandomCopyBytes(kSecRandomDefault, length, $0.baseAddress!) else { fatalError() }
+			guard let base=$0.baseAddress else {return}
+			guard 0 == SecRandomCopyBytes(kSecRandomDefault, length, base) else {return}
 		}
 		return data
 	}

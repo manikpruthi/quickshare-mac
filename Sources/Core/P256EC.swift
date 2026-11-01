@@ -24,12 +24,13 @@ struct ECPrivateKey {
         ECPublicKey(keyAgreement: keyAgreement.publicKey, signing: signing.publicKey)
     }
 
-    /// Raw (r || s), 32 bytes each — matches ECSignature serialization in use.
-    func sign(msg: Data) -> (r: Data, s: Data) {
-        let sig = try! signing.signature(for: msg)
-        let raw = sig.rawRepresentation
-        return (Data(raw.prefix(32)), Data(raw.suffix(32)))
-    }
+	/// Raw (r || s), 32 bytes each — matches ECSignature serialization in use.
+	enum SignError: Error{case failed}
+	func sign(msg: Data) throws -> (r: Data, s: Data) {
+		let sig=try signing.signature(for: msg)
+		let raw = sig.rawRepresentation
+		return (Data(raw.prefix(32)), Data(raw.suffix(32)))
+	}
 }
 
 enum ECDomain {

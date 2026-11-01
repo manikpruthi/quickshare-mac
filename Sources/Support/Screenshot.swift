@@ -31,8 +31,10 @@ enum Screenshot {
     private static func capture(window: NSWindow) -> Data? {
         guard let view = window.contentView else { return nil }
         let rect = view.bounds
-        guard let rep = view.bitmapImageRepForCachingDisplay(in: rect) else { return nil }
-        view.cacheDisplay(in: rect, to: rep)
-        return rep.representation(using: .png, properties: [:])
+        return autoreleasepool {
+            guard let rep = view.bitmapImageRepForCachingDisplay(in: rect) else { return nil as Data? }
+            view.cacheDisplay(in: rect, to: rep)
+            return rep.representation(using: .png, properties: [:])
+        }
     }
 }

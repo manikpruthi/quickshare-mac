@@ -105,7 +105,7 @@ enum SelfTest {
         let sBA = try ECDomain.sharedSecret(privateKey: privB, peerX: signedBytes(pubA.rawX), peerY: signedBytes(pubA.rawY))
         guard sAB == sBA else { throw TestErr.bad("ecdh asymmetry") }
         let msg = Data("authkey-material".utf8)
-        let sig = privA.sign(msg: msg)
+        let sig = try privA.sign(msg: msg)
         let raw = sig.r + sig.s
         guard raw.count == 64 else { throw TestErr.bad("sig len") }
         // Verify via CryptoKit ECDSA raw signature
@@ -147,8 +147,8 @@ enum SelfTest {
             if case .ready = st { ready.signal() }
             if case .failed(let e) = st { listenerFailed = e; ready.signal() }
         }
-        listener.newConnectionHandler = { nwconn in
-            let srv = LoopbackServer(connection: nwconn, id: "srv", destDir: destDir) { result in
+        listener.newConnectionHandler = { [weak serverConnHolder] nwconn in
+            let srv = LoopbackServer(connection: nwconn, id: "srv") { result in
                 switch result {
                 case .success(let files):
                     receivedFiles = files
@@ -157,14 +157,15 @@ enum SelfTest {
                 }
                 serverDone.signal()
             }
-            srv.connectionDidClose = {
+            srv.connectionDidClose = { [weak srv] in
+                guard let srv = srv else {return}
                 if srv.fileCount > 0 {
                     receivedFiles = srv.allCollected
                     serverDone.signal()
                 }
             }
-            serverConnHolder.conn = srv
-            serverConnHolder.conn?.start()
+            serverConnHolder?.conn = srv
+            serverConnHolder?.conn?.start()
         }
         listener.start(queue: DispatchQueue(label: "loopback-listener"))
         guard ready.wait(timeout: .now() + 10) == .success else { throw TestErr.bad("listener never ready") }
@@ -185,8 +186,8 @@ enum SelfTest {
         }
         clientHolder.conn = client
         client.start()
-        let serverWait = serverDone.wait(timeout: .now() + 20)
-        let clientWait = clientDone.wait(timeout: .now() + 10)
+        let serverWait = pump(semaphore: serverDone, timeout: 20)
+        let clientWait = pump(semaphore: clientDone, timeout: 10)
         listener.cancel()
         guard serverWait == .success else { throw TestErr.bad("server timeout") }
         guard clientWait == .success else { throw TestErr.bad("client timeout") }
@@ -205,34 +206,46 @@ enum TestErr: Error {
     case bad(String)
 }
 
+private func pump(semaphore: DispatchSemaphore, timeout: TimeInterval) -> DispatchTimeoutResult{
+    let deadline=Date(timeIntervalSinceNow: timeout)
+    while true{
+        if semaphore.wait(timeout: .now()+DispatchTimeInterval.milliseconds(50))==DispatchTimeoutResult.success{return .success}
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        if Date()>deadline{return .timedOut}
+    }
+}
+
 // Minimal inbound subclass writing files to a temp dir and auto-accepting.
 final class LoopbackServer: InboundNearbyConnection {
-    private let finish: (Result<[String: Data], Error>) -> Void
     private var collected: [String: Data] = [:]
-    private let destDir: URL
     var fileCount: Int { collected.count }
     var allCollected: [String: Data] { collected }
-    var lastErrorValue: Error? { lastError }
 
-    init(connection: NWConnection, id: String, destDir: URL, finish: @escaping (Result<[String: Data], Error>) -> Void) {
-        self.destDir = destDir
-        self.finish = finish
-        super.init(connection: connection, id: id)
-        self.delegate = self
-    }
-
-    override func decryptAndProcessReceivedSecureMessage(_ smsg: Securemessage_SecureMessage) throws {
-        do {
-            try super.decryptAndProcessReceivedSecureMessage(smsg)
-        } catch {
-            throw error
+    private final class AutoDelegate: InboundNearbyConnectionDelegate{
+        weak var server:LoopbackServer?
+        let finish:(Result<[String: Data], Error>) -> Void
+        init(server:LoopbackServer, finish:@escaping (Result<[String: Data], Error>) -> Void){
+            self.server=server
+            self.finish=finish
+        }
+        func obtainUserConsent(for transfer: TransferMetadata, from device: RemoteDeviceInfo, connection: InboundNearbyConnection) {
+            connection.submitUserConsentDirect(accepted: true)
+        }
+        func connectionWasTerminated(connection: InboundNearbyConnection, error: Error?) {
+            let collected=server?.allCollected ?? [:]
+            if collected.isEmpty, let e = error{
+                finish(.failure(e))
+            } else {
+                finish(.success(collected))
+            }
         }
     }
+    private var autoDelegate:AutoDelegate?
 
-
-
-    override func processTransferSetupFrame(_ frame: Sharing_Nearby_Frame) throws {
-        try super.processTransferSetupFrame(frame)
+    init(connection: NWConnection, id: String, finish: @escaping (Result<[String: Data], Error>) -> Void) {
+        super.init(connection: connection, id: id)
+        autoDelegate=AutoDelegate(server: self, finish: finish)
+        delegate=autoDelegate
     }
 
     override func processReceivedFrame(frameData: Data) {
@@ -242,32 +255,11 @@ final class LoopbackServer: InboundNearbyConnection {
     override func processFileChunk(frame: Location_Nearby_Connections_PayloadTransferFrame) throws {
         let id = frame.payloadHeader.id
         var cur = collected["file-\(id)"] ?? Data()
+        cur.reserveCapacity(cur.count + frame.payloadChunk.body.count)
         cur.append(frame.payloadChunk.body)
         collected["file-\(id)"] = cur
         if (frame.payloadChunk.flags & 1) == 1 {
             try sendDisconnectionAndDisconnect()
-        }
-    }
-
-    override func processBytesPayload(payload: Data, id: Int64) throws -> Bool {
-        if let inner = try? Sharing_Nearby_Frame(serializedData: payload) {
-        } else {
-        }
-        return try super.processBytesPayload(payload: payload, id: id)
-    }
-}
-
-extension LoopbackServer: InboundNearbyConnectionDelegate {
-    func obtainUserConsent(for transfer: TransferMetadata, from device: RemoteDeviceInfo, connection: InboundNearbyConnection) {
-        connection.submitUserConsentDirect(accepted: true)
-    }
-
-    func connectionWasTerminated(connection: InboundNearbyConnection, error: Error?) {
-        _ = destDir
-        if collected.isEmpty, let e = error {
-            finish(.failure(e))
-        } else {
-            finish(.success(collected))
         }
     }
 }
@@ -281,31 +273,36 @@ final class LoopbackServer2: InboundNearbyConnection { // unused
 }
 
 final class LoopbackClient: OutboundNearbyConnection {
-    private let finish: (Error?) -> Void
     private var finished = false
-
-    init(connection: NWConnection, id: String, urlsToSend: [URL], finish: @escaping (Error?) -> Void) {
-        self.finish = finish
-        super.init(connection: connection, id: id, urlsToSend: urlsToSend)
-        self.delegate = self
-    }
-
-    private func done(_ e: Error?) {
-        if !finished {
-            finished = true
-            finish(e)
+    private final class AutoDelegate: OutboundNearbyConnectionDelegate{
+        weak var client:LoopbackClient?
+        let finish:(Error?) -> Void
+        init(client:LoopbackClient, finish:@escaping (Error?) -> Void){
+            self.client=client
+            self.finish=finish
+        }
+        func outboundConnectionWasEstablished(connection: OutboundNearbyConnection) {}
+        func outboundConnection(connection: OutboundNearbyConnection, transferProgress: Double) {}
+        func outboundConnectionTransferAccepted(connection: OutboundNearbyConnection) {}
+        func outboundConnection(connection: OutboundNearbyConnection, failedWithError: Error) {
+            client?.done(failedWithError)
+        }
+        func outboundConnectionTransferFinished(connection: OutboundNearbyConnection) {
+            client?.done(nil)
         }
     }
-}
+    private var autoDelegate:AutoDelegate?
 
-extension LoopbackClient: OutboundNearbyConnectionDelegate {
-    func outboundConnectionWasEstablished(connection: OutboundNearbyConnection) {}
-    func outboundConnection(connection: OutboundNearbyConnection, transferProgress: Double) {}
-    func outboundConnectionTransferAccepted(connection: OutboundNearbyConnection) {}
-    func outboundConnection(connection: OutboundNearbyConnection, failedWithError: Error) {
-        done(failedWithError)
+    init(connection: NWConnection, id: String, urlsToSend: [URL], finish: @escaping (Error?) -> Void) {
+        super.init(connection: connection, id: id, urlsToSend: urlsToSend)
+        autoDelegate=AutoDelegate(client: self, finish: finish)
+        delegate=autoDelegate
     }
-    func outboundConnectionTransferFinished(connection: OutboundNearbyConnection) {
-        done(nil)
+
+    fileprivate func done(_ e: Error?) {
+        if !finished {
+            finished = true
+            autoDelegate?.finish(e)
+        }
     }
 }

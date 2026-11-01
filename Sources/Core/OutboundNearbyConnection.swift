@@ -1,10 +1,3 @@
-//
-//  OutboundNearbyConnection.swift
-//  NearbyShare
-//
-//  Created by Grishka on 23.09.2023.
-//
-
 import Foundation
 import Network
 import CryptoKit
@@ -19,20 +12,20 @@ class OutboundNearbyConnection:NearbyConnection{
 	private var currentState:State = .initial
 	private let urlsToSend:[URL]
 	private var ukeyClientFinishMsgData:Data?
-	private var queue:[OutgoingFileTransfer]=[]
+	private var pendingFiles:[OutgoingFileTransfer]=[]
 	private var currentTransfer:OutgoingFileTransfer?
-	public var delegate:OutboundNearbyConnectionDelegate?
+	weak var delegate:(any OutboundNearbyConnectionDelegate)?
 	private var totalBytesToSend:Int64=0
 	private var totalBytesSent:Int64=0
 	private var cancelled:Bool=false
 	private var textPayloadID:Int64=0
-	
+
 	public var qrCodePrivateKey:ECPrivateKey?
-	
+
 	enum State{
 		case initial, sentUkeyClientInit, sentUkeyClientFinish, sentPairedKeyEncryption, sentPairedKeyResult, sentIntroduction, sendingFiles
 	}
-	
+
 	init(connection: NWConnection, id: String, urlsToSend:[URL]){
 		self.urlsToSend=urlsToSend
 		super.init(connection: connection, id: id)
@@ -40,18 +33,18 @@ class OutboundNearbyConnection:NearbyConnection{
 			textPayloadID=Int64.random(in: Int64.min...Int64.max)
 		}
 	}
-	
+
 	deinit {
 		if let transfer=currentTransfer, let handle=transfer.handle{
 			try? handle.close()
 		}
-		for transfer in queue{
+		for transfer in pendingFiles{
 			if let handle=transfer.handle{
 				try? handle.close()
 			}
 		}
 	}
-	
+
 	public func cancel(){
 		cancelled=true
 		if encryptionDone{
@@ -63,7 +56,20 @@ class OutboundNearbyConnection:NearbyConnection{
 		}
 		try? sendDisconnectionAndDisconnect()
 	}
-	
+
+	private func closeQueuedHandles(){
+		if let transfer=currentTransfer, let handle=transfer.handle{
+			try? handle.close()
+		}
+		currentTransfer=nil
+		for transfer in pendingFiles{
+			if let handle=transfer.handle{
+				try? handle.close()
+			}
+		}
+		pendingFiles.removeAll()
+	}
+
 	override func connectionReady() {
 		super.connectionReady()
 		do{
@@ -74,17 +80,16 @@ class OutboundNearbyConnection:NearbyConnection{
 			protocolError()
 		}
 	}
-	
+
 	override func isServer() -> Bool {
 		return false
 	}
-	
+
 	override func processReceivedFrame(frameData: Data) {
 		do{
-			#if DEBUG
-			#endif
 			switch currentState {
 			case .initial:
+				lastError=NearbyError.protocolError("frame before handshake")
 				protocolError()
 			case .sentUkeyClientInit:
 				try processUkey2ServerInit(frame: try Securegcm_Ukey2Message(serializedData: frameData), raw: frameData)
@@ -103,7 +108,7 @@ class OutboundNearbyConnection:NearbyConnection{
 			protocolError()
 		}
 	}
-	
+
 	override func processTransferSetupFrame(_ frame: Sharing_Nearby_Frame) throws {
 		if frame.hasV1 && frame.v1.hasType, case .cancel = frame.v1.type {
 			try sendDisconnectionAndDisconnect()
@@ -120,34 +125,37 @@ class OutboundNearbyConnection:NearbyConnection{
 		case .sendingFiles:
 			break
 		default:
-			assertionFailure("Unexpected state \(currentState)")
+			throw NearbyError.protocolError("Unexpected state \(currentState)")
 		}
 	}
-	
+
 	override func protocolError() {
 		super.protocolError()
-		delegate?.outboundConnection(connection: self, failedWithError: lastError!)
+		closeQueuedHandles()
+		delegate?.outboundConnection(connection: self, failedWithError: lastError ?? NearbyError.protocolError("unknown"))
 	}
-	
+
 	private func sendConnectionRequest() throws {
 		var frame=Location_Nearby_Connections_OfflineFrame()
 		frame.version = .v1
 		frame.v1=Location_Nearby_Connections_V1Frame()
 		frame.v1.type = .connectionRequest
 		frame.v1.connectionRequest=Location_Nearby_Connections_ConnectionRequestFrame()
-		frame.v1.connectionRequest.endpointID=String(bytes: NearbyConnectionManager.shared.endpointID, encoding: .ascii)!
-		frame.v1.connectionRequest.endpointName=Host.current().localizedName!
-		let endpointInfo=EndpointInfo(name: Host.current().localizedName!, deviceType: .computer)
+		let prefs=QSPreferences.load()
+		let deviceName=prefs.deviceName.isEmpty ? (Host.current().localizedName ?? "Mac") : prefs.deviceName
+		frame.v1.connectionRequest.endpointID=String(bytes: NearbyConnectionManager.shared.endpointID, encoding: .ascii) ?? "MAC"
+		frame.v1.connectionRequest.endpointName=deviceName
+		let endpointInfo=EndpointInfo(name: deviceName, deviceType: .computer)
 		frame.v1.connectionRequest.endpointInfo=endpointInfo.serialize()
 		frame.v1.connectionRequest.mediums=[.wifiLan]
 		sendFrameAsync(try frame.serializedData())
 	}
-	
+
 	private func sendUkey2ClientInit() throws {
 		let (pubKey, privKey)=ECDomain.makeKeyPair()
 		publicKey=pubKey
 		privateKey=privKey
-		
+
 		var finishFrame=Securegcm_Ukey2Message()
 		finishFrame.messageType = .clientFinish
 		var finish=Securegcm_Ukey2ClientFinished()
@@ -159,27 +167,27 @@ class OutboundNearbyConnection:NearbyConnection{
 		finish.publicKey=try pkey.serializedData()
 		finishFrame.messageData=try finish.serializedData()
 		ukeyClientFinishMsgData=try finishFrame.serializedData()
-		
+
 		var frame=Securegcm_Ukey2Message()
 		frame.messageType = .clientInit
-		
+
 		var clientInit=Securegcm_Ukey2ClientInit()
 		clientInit.version=1
 		clientInit.random=Data.randomData(length: 32)
 		clientInit.nextProtocol="AES_256_CBC-HMAC_SHA256"
 		var sha=SHA512()
-		sha.update(data: ukeyClientFinishMsgData!)
+		sha.update(data: ukeyClientFinishMsgData ?? Data())
 		var commitment=Securegcm_Ukey2ClientInit.CipherCommitment()
 		commitment.commitment=Data(sha.finalize())
 		commitment.handshakeCipher = .p256Sha512
 		clientInit.cipherCommitments.append(commitment)
 		frame.messageData=try clientInit.serializedData()
-		
+
 		ukeyClientInitMsgData=try frame.serializedData()
 		sendFrameAsync(ukeyClientInitMsgData!)
 		currentState = .sentUkeyClientInit
 	}
-	
+
 	private func processUkey2ServerInit(frame:Securegcm_Ukey2Message, raw:Data) throws{
 		ukeyServerInitMsgData=raw
 		guard frame.messageType == .serverInit else{
@@ -199,12 +207,13 @@ class OutboundNearbyConnection:NearbyConnection{
 			sendUkey2Alert(type: .badHandshakeCipher)
 			throw NearbyError.ukey2
 		}
-		
+
 		let serverKey=try Securemessage_GenericPublicKey(serializedData: serverInit.publicKey)
 		try finalizeKeyExchange(peerKey: serverKey)
-		sendFrameAsync(ukeyClientFinishMsgData!)
+		guard let clientFinish=ukeyClientFinishMsgData else {throw NearbyError.requiredFieldMissing("ukeyClientFinish")}
+		sendFrameAsync(clientFinish)
 		currentState = .sentUkeyClientFinish
-		
+
 		var resp=Location_Nearby_Connections_OfflineFrame()
 		resp.version = .v1
 		resp.v1=Location_Nearby_Connections_V1Frame()
@@ -215,18 +224,16 @@ class OutboundNearbyConnection:NearbyConnection{
 		resp.v1.connectionResponse.osInfo=Location_Nearby_Connections_OsInfo()
 		resp.v1.connectionResponse.osInfo.type = .apple
 		sendFrameAsync(try resp.serializedData())
-		
+
 		encryptionDone=true
 		delegate?.outboundConnectionWasEstablished(connection: self)
 	}
-	
+
 	private func processConnectionResponse(frame:Location_Nearby_Connections_OfflineFrame) throws{
-		#if DEBUG
-		#endif
 		guard frame.version == .v1 else {throw NearbyError.protocolError("Unexpected offline frame version \(frame.version)")}
 		guard frame.v1.type == .connectionResponse else {throw NearbyError.protocolError("Unexpected frame type \(frame.v1.type)")}
 		guard frame.v1.connectionResponse.response == .accept else {throw NearbyError.protocolError("Connection was rejected by recipient")}
-		
+
 		var pairedEncryption=Sharing_Nearby_Frame()
 		pairedEncryption.version = .v1
 		pairedEncryption.v1=Sharing_Nearby_V1Frame()
@@ -234,17 +241,18 @@ class OutboundNearbyConnection:NearbyConnection{
 		pairedEncryption.v1.pairedKeyEncryption=Sharing_Nearby_PairedKeyEncryptionFrame()
 		pairedEncryption.v1.pairedKeyEncryption.secretIDHash=Data.randomData(length: 6)
 		pairedEncryption.v1.pairedKeyEncryption.signedData=Data.randomData(length: 72)
-		if let qrKey=qrCodePrivateKey{
-			let signature=qrKey.sign(msg: authKey!.data())
-			var serializedSignature=signature.r
-			serializedSignature.append(signature.s)
-			pairedEncryption.v1.pairedKeyEncryption.qrCodeHandshakeData=serializedSignature
+		if let qrKey=qrCodePrivateKey, let auth=authKey{
+			if let signature=try? qrKey.sign(msg: auth.data()){
+				var serializedSignature=signature.0
+				serializedSignature.append(signature.1)
+				pairedEncryption.v1.pairedKeyEncryption.qrCodeHandshakeData=serializedSignature
+			}
 		}
 		try sendTransferSetupFrame(pairedEncryption)
-		
+
 		currentState = .sentPairedKeyEncryption
 	}
-	
+
 	private func processPairedKeyEncryption(frame:Sharing_Nearby_Frame) throws{
 		guard frame.hasV1, frame.v1.hasPairedKeyEncryption else { throw NearbyError.requiredFieldMissing("sharingNearbyFrame.v1.pairedKeyEncryption") }
 		var pairedResult=Sharing_Nearby_Frame()
@@ -256,10 +264,10 @@ class OutboundNearbyConnection:NearbyConnection{
 		try sendTransferSetupFrame(pairedResult)
 		currentState = .sentPairedKeyResult
 	}
-	
+
 	private func processPairedKeyResult(frame:Sharing_Nearby_Frame) throws{
 		guard frame.hasV1, frame.v1.hasPairedKeyResult else { throw NearbyError.requiredFieldMissing("sharingNearbyFrame.v1.pairedKeyResult") }
-		
+
 		var introduction=Sharing_Nearby_Frame()
 		introduction.version = .v1
 		introduction.v1.type = .introduction
@@ -273,10 +281,14 @@ class OutboundNearbyConnection:NearbyConnection{
 		}else{
 			for url in urlsToSend{
 				guard url.isFileURL else {continue}
+				let isDir=(try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+				guard !isDir else {continue}
 				var meta=Sharing_Nearby_FileMetadata()
-				meta.name=OutboundNearbyConnection.sanitizeFileName(name: url.lastPathComponent)
+				meta.name=NearbyConnection.sanitizeFileName(url.lastPathComponent)
 				let attrs=try FileManager.default.attributesOfItem(atPath: url.path)
-				meta.size=(attrs[FileAttributeKey.size] as! NSNumber).int64Value
+				guard let sizeNum=attrs[FileAttributeKey.size] as? NSNumber else {continue}
+				meta.size=sizeNum.int64Value
+				guard meta.size>=0 else {continue}
 				let typeID=try? url.resourceValues(forKeys: [.typeIdentifierKey]).typeIdentifier
 				meta.mimeType="application/octet-stream"
 				if let typeID=typeID{
@@ -303,18 +315,26 @@ class OutboundNearbyConnection:NearbyConnection{
 					meta.type = .unknown
 				}
 				meta.payloadID=Int64.random(in: Int64.min...Int64.max)
-				queue.append(OutgoingFileTransfer(url: url, payloadID: meta.payloadID, handle: try FileHandle(forReadingFrom: url), totalBytes: meta.size, currentOffset: 0))
+				do{
+					let handle=try FileHandle(forReadingFrom: url)
+					pendingFiles.append(OutgoingFileTransfer(url: url, payloadID: meta.payloadID, handle: handle, totalBytes: meta.size, currentOffset: 0))
+				}catch{
+					continue
+				}
 				introduction.v1.introduction.fileMetadata.append(meta)
 				totalBytesToSend+=meta.size
 			}
 		}
-		#if DEBUG
-		#endif
-		try sendTransferSetupFrame(introduction)
-		
+		do{
+			try sendTransferSetupFrame(introduction)
+		}catch{
+			closeQueuedHandles()
+			throw error
+		}
+
 		currentState = .sentIntroduction
 	}
-	
+
 	private func processConsent(frame:Sharing_Nearby_Frame) throws{
 		guard frame.version == .v1, frame.v1.type == .response else {throw NearbyError.requiredFieldMissing("sharingNearbyFrame.v1.type==response")}
 		switch frame.v1.connectionResponse.status{
@@ -340,58 +360,61 @@ class OutboundNearbyConnection:NearbyConnection{
 			try sendDisconnectionAndDisconnect()
 		}
 	}
-	
+
 	private func sendURL() throws{
 		try sendBytesPayload(data: Data(urlsToSend[0].absoluteString.utf8), id: textPayloadID)
 		delegate?.outboundConnectionTransferFinished(connection: self)
 		try sendDisconnectionAndDisconnect()
 	}
-	
+
 	private func sendNextFileChunk() throws{
 		if cancelled{
 			return
 		}
 		if currentTransfer==nil || currentTransfer?.currentOffset==currentTransfer?.totalBytes{
 			if currentTransfer != nil && currentTransfer?.handle != nil{
-				try currentTransfer?.handle?.close()
+				try? currentTransfer?.handle?.close()
 			}
-			if queue.isEmpty{
-				#if DEBUG
-				#endif
+			if pendingFiles.isEmpty{
 				try sendDisconnectionAndDisconnect()
 				delegate?.outboundConnectionTransferFinished(connection: self)
 				return
 			}
-			currentTransfer=queue.removeFirst()
+			currentTransfer=pendingFiles.removeFirst()
 		}
-		
+
+		guard let transfer=currentTransfer, let handle=transfer.handle else {
+			throw NearbyError.inputOutput
+		}
+
 		let fileBuffer:Data
 		if #available(macOS 10.15.4, *) {
-			guard let _fileBuffer=try currentTransfer!.handle!.read(upToCount: 512*1024) else{
+			guard let _fileBuffer=try handle.read(upToCount: Self.chunkSize) else{
 				throw NearbyError.inputOutput
 			}
 			fileBuffer=_fileBuffer
 		} else {
-			fileBuffer=currentTransfer!.handle!.readData(ofLength: 512*1024)
+			fileBuffer=handle.readData(ofLength: Self.chunkSize)
 		}
-		
-		var transfer=Location_Nearby_Connections_PayloadTransferFrame()
-		transfer.packetType = .data
-		transfer.payloadChunk.offset=currentTransfer!.currentOffset
-		transfer.payloadChunk.flags=0
-		transfer.payloadChunk.body=fileBuffer
-		transfer.payloadHeader.id=currentTransfer!.payloadID
-		transfer.payloadHeader.type = .file
-		transfer.payloadHeader.totalSize=Int64(currentTransfer!.totalBytes)
-		transfer.payloadHeader.isSensitive=false
+
+		var transferFrame=Location_Nearby_Connections_PayloadTransferFrame()
+		transferFrame.packetType = .data
+		transferFrame.payloadChunk.offset=transfer.currentOffset
+		transferFrame.payloadChunk.flags=0
+		transferFrame.payloadChunk.body=fileBuffer
+		transferFrame.payloadHeader.id=transfer.payloadID
+		transferFrame.payloadHeader.type = .file
+		transferFrame.payloadHeader.totalSize=Int64(transfer.totalBytes)
+		transferFrame.payloadHeader.isSensitive=false
 		currentTransfer!.currentOffset+=Int64(fileBuffer.count)
-		
+
 		var wrapper=Location_Nearby_Connections_OfflineFrame()
 		wrapper.version = .v1
 		wrapper.v1=Location_Nearby_Connections_V1Frame()
 		wrapper.v1.type = .payloadTransfer
-		wrapper.v1.payloadTransfer=transfer
-		try encryptAndSendOfflineFrame(wrapper, completion: {
+		wrapper.v1.payloadTransfer=transferFrame
+		try encryptAndSendOfflineFrame(wrapper, completion: {[weak self] in
+			guard let self=self else {return}
 			do{
 				try self.sendNextFileChunk()
 			}catch{
@@ -399,36 +422,30 @@ class OutboundNearbyConnection:NearbyConnection{
 				self.protocolError()
 			}
 		})
-		#if DEBUG
-		#endif
 		totalBytesSent+=Int64(fileBuffer.count)
-		delegate?.outboundConnection(connection: self, transferProgress: Double(totalBytesSent)/Double(totalBytesToSend))
-		
+		let denom=max(totalBytesToSend, 1)
+		delegate?.outboundConnection(connection: self, transferProgress: min(1, Double(totalBytesSent)/Double(denom)))
+
 		if currentTransfer!.currentOffset==currentTransfer!.totalBytes{
-			// Signal end of file (yes, all this for one bit)
-			var transfer=Location_Nearby_Connections_PayloadTransferFrame()
-			transfer.packetType = .data
-			transfer.payloadChunk.offset=currentTransfer!.currentOffset
-			transfer.payloadChunk.flags=1 // <- this one here
-			transfer.payloadHeader.id=currentTransfer!.payloadID
-			transfer.payloadHeader.type = .file
-			transfer.payloadHeader.totalSize=Int64(currentTransfer!.totalBytes)
-			transfer.payloadHeader.isSensitive=false
-			
-			var wrapper=Location_Nearby_Connections_OfflineFrame()
-			wrapper.version = .v1
-			wrapper.v1=Location_Nearby_Connections_V1Frame()
-			wrapper.v1.type = .payloadTransfer
-			wrapper.v1.payloadTransfer=transfer
-			try encryptAndSendOfflineFrame(wrapper)
-			#if DEBUG
-			#endif
+			var endFrame=Location_Nearby_Connections_PayloadTransferFrame()
+			endFrame.packetType = .data
+			endFrame.payloadChunk.offset=currentTransfer!.currentOffset
+			endFrame.payloadChunk.flags=1
+			endFrame.payloadHeader.id=currentTransfer!.payloadID
+			endFrame.payloadHeader.type = .file
+			endFrame.payloadHeader.totalSize=Int64(currentTransfer!.totalBytes)
+			endFrame.payloadHeader.isSensitive=false
+
+			var endWrapper=Location_Nearby_Connections_OfflineFrame()
+			endWrapper.version = .v1
+			endWrapper.v1=Location_Nearby_Connections_V1Frame()
+			endWrapper.v1.type = .payloadTransfer
+			endWrapper.v1.payloadTransfer=endFrame
+			try encryptAndSendOfflineFrame(endWrapper)
 		}
 	}
-	
-	private static func sanitizeFileName(name:String)->String{
-		return name.replacingOccurrences(of: "[\\/\\\\?%\\*:\\|\"<>=]", with: "_", options: .regularExpression)
-	}
+
+	private static let chunkSize=512*1024
 }
 
 fileprivate struct OutgoingFileTransfer{
@@ -439,7 +456,7 @@ fileprivate struct OutgoingFileTransfer{
 	var currentOffset:Int64
 }
 
-protocol OutboundNearbyConnectionDelegate{
+protocol OutboundNearbyConnectionDelegate: AnyObject{
 	func outboundConnectionWasEstablished(connection:OutboundNearbyConnection)
 	func outboundConnection(connection:OutboundNearbyConnection, transferProgress:Double)
 	func outboundConnectionTransferAccepted(connection:OutboundNearbyConnection)

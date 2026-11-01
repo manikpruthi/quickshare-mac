@@ -10,6 +10,9 @@ import CryptoKit
 
 extension SymmetricKey{
 	func data() -> Data{
-		return withUnsafeBytes({return Data(bytes: $0.baseAddress!, count: $0.count)})
+		return withUnsafeBytes({
+			guard let base=$0.baseAddress else {return Data()}
+			return Data(bytes: base, count: $0.count)
+		})
 	}
 }

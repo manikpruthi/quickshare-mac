@@ -79,14 +79,16 @@ it the Mac stays invisible to phones.
 | Action | How |
 | --- | --- |
 | Receive from Android | Menu bar → **Receive Mode: ON**, then on the phone: Gallery/Files → Share → Quick Share → your Mac → match the PIN → Accept on the Mac |
-| Send to Android | Menu bar → **Send to Android…** → Choose Files → pick the phone (open Quick Share on the phone first, or scan the QR code) → Accept on the phone → **Done** closes the window |
-| QR-code wake | Scan the QR code shown in the Send window (regenerates every open), or Copy Link |
-| Stop advertising | Menu bar → **Receive Mode: OFF** |
+| Send to Android | Menu bar → **Send to Android…** → Choose Files (or drag-drop; folders are zipped) or switch to **Message** tab for a link/text → pick the phone (open Quick Share on the phone first, or scan the QR code) → Accept on the phone → **Done** closes the window |
+| QR-code wake | Scan the QR code shown in the Send window (regenerates per open), or Copy Link |
+| Stop advertising | Menu bar → **Receive Mode: OFF** (also auto-offs after N minutes — see Preferences) |
+| Preferences | Menu bar → **Preferences…** → download folder, device name, auto-off timer, auto-accept |
+| Recent transfers | Menu bar → **Recent Transfers** submenu, or **History** button in the Send window |
 | From mac-explorer | Right-click a file → **Share** → **Quick Share** (first item in the submenu) |
 | From Finder | Right-click → Share → QuickShare-Mac (once the app has run once) |
 | Headless checks | `QuickShare-Mac --self-test`, `QuickShare-Mac --receive-test [secs]`, `QuickShare-Mac --window-test`, `QuickShare-Mac --screenshot out.png` |
 
-Files received land in Downloads with automatic de-duplication (`name (1).ext`).
+Files received land in your chosen download folder (Preferences, default Downloads) with automatic de-duplication (`name (1).ext`). A notification fires on completion.
 
 ## How it works
 
@@ -112,11 +114,13 @@ supported wake routes. Sending uses `wifiLan` medium only.
 - `Sources/App/` — `main.swift` (menu-bar entry + `--self-test`/`--receive-test`/`--screenshot` harnesses), `AppDelegate` (status item, receive toggle, send window).
 - `Sources/Core/` — vendored Nearby Share core: `NearbyConnectionManager` (advertise/browse/QR), `NearbyConnection` (framing, UKEY2, SecureMessage AES-CBC+HMAC, sequence checks), `InboundNearbyConnection` (receive + Downloads finalize), `OutboundNearbyConnection` (send + progress), `P256EC` (CryptoKit ECDH/ECDSA shim), `ProtoCompatWriter` (test varint codec), `Protobuf/*.pb.swift` + `ProtobufSource/*.proto`.
 - `Sources/Services/ShareEngine.swift` — receive/session lifecycle, consent routing.
-- `Sources/UI/SendWindow.swift` — foreground send window (device list, QR, progress).
-- `Sources/Models/Models.swift` — preferences (destination, auto-off).
+- `Sources/UI/SendWindow.swift` — foreground send window (device list, file list, message tab, QR, speed/ETA progress, history).
+- `Sources/UI/PrefsWindow.swift` — preferences window (download folder, device name, auto-off, auto-accept).
+- `Sources/Models/Models.swift` — `QSPreferences` (UserDefaults + security-scoped bookmark).
+- `Sources/Models/HistoryStore.swift` — JSONL transfer history (`Application Support/QuickShare/history.jsonl`).
 - `Sources/Support/` — `SelfTest` (unit + full handshake loopback), `ReceiveTest`, `Screenshot`,
   and `WindowLifecycleTest` (Send-window open/close, late device discovery, handoff) harnesses.
-- `ShareExtension/` — reserved for the bundled share extension (wires into Finder/mac-explorer Share menus).
+- `ShareExtension/` — reserved for the bundled share extension (wires into Finder/mac-explorer Share menus). Until then, Finder/mac-explorer use the `quickshare://send?handoff=` URL flow (hardened: temp-dir only, 1 MB cap). See `docs/troubleshooting.md`.
 
 There is one subprocess pattern only: none at runtime — everything is in-process
 `Network`/`CryptoKit`. No helpers, daemons, or sidecars.
