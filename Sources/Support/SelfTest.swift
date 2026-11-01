@@ -15,6 +15,7 @@ enum SelfTest {
         check("AES-GCM QR TLV round-trip", testAESGCM)
         check("PIN derivation format", testPIN)
         check("UKEY2 sign/verify interop", testUkeySignVerify)
+        check("QR image renders scannable", testQRImage)
         check("full handshake loopback (client+server)", testHandshakeLoopback)
         if failed {
             print("SELF-TEST: FAIL")
@@ -111,6 +112,17 @@ enum SelfTest {
         let pub = try P256.Signing.PublicKey(x963Representation: Data([0x04]) + privA.publicKey.signing.rawRepresentation)
         let ecdsaSig = try P256.Signing.ECDSASignature(rawRepresentation: raw)
         guard pub.isValidSignature(ecdsaSig, for: msg) else { throw TestErr.bad("sig verify") }
+    }
+
+    private static func testQRImage() throws {
+        guard let image = qrImage(from: "https://quickshare.google/qrcode#key=TESTKEY123", size: 160) else {
+            throw TestErr.bad("qr render nil")
+        }
+        guard image.size.width == 160 && image.size.height == 160 else {
+            throw TestErr.bad("qr size \(image.size)")
+        }
+        let rep = image.representations.first
+        guard rep != nil else { throw TestErr.bad("qr no representation") }
     }
 
     // Full protocol handshake over real NWConnections on localhost:

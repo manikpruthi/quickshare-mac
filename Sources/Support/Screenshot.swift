@@ -32,19 +32,29 @@ enum Screenshot {
 
 enum SendWindowShot {
     static func make() -> NSWindow {
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 380),
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 620),
                          styleMask: [.titled, .closable],
                          backing: .buffered, defer: false)
         w.title = "Send to Android"
         w.center()
         let label = NSTextField(labelWithString: "Open Quick Share on the Android phone so it appears here, or scan the QR code below.")
-        label.frame = NSRect(x: 20, y: 320, width: 420, height: 40)
+        label.frame = NSRect(x: 20, y: 566, width: 440, height: 44)
         label.lineBreakMode = .byWordWrapping
         w.contentView?.addSubview(label)
+        let devLabel = NSTextField(labelWithString: "Nearby Android devices:")
+        devLabel.frame = NSRect(x: 20, y: 504, width: 440, height: 20)
+        w.contentView?.addSubview(devLabel)
         let list = NSTextField(labelWithString: "Searching for nearby Android devices…")
-        list.frame = NSRect(x: 20, y: 250, width: 420, height: 60)
+        list.frame = NSRect(x: 20, y: 352, width: 440, height: 146)
         list.lineBreakMode = .byWordWrapping
         w.contentView?.addSubview(list)
+        let qrLabel = NSTextField(labelWithString: "Scan with the Android phone to connect instantly:")
+        qrLabel.frame = NSRect(x: 20, y: 228, width: 440, height: 20)
+        w.contentView?.addSubview(qrLabel)
+        let qrView = NSImageView(frame: NSRect(x: 20, y: 58, width: 160, height: 160))
+        qrView.imageScaling = .scaleProportionallyUpOrDown
+        qrView.image = qrImage(from: "https://quickshare.google/qrcode#key=PREVIEW", size: 160)
+        w.contentView?.addSubview(qrView)
         return w
     }
 }
