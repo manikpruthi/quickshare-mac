@@ -299,6 +299,8 @@ public class NearbyConnectionManager : NSObject, NetServiceDelegate, InboundNear
 						switch change{
 						case let .added(res):
 							self.maybeAddFoundDevice(service: res)
+						case let .changed(_, newResult, _):
+							self.maybeAddFoundDevice(service: newResult)
 						case let .removed(res):
 							self.maybeRemoveFoundDevice(service: res)
 						default:
@@ -313,8 +315,8 @@ public class NearbyConnectionManager : NSObject, NetServiceDelegate, InboundNear
 	}
 	
 	public func stopDeviceDiscovery(){
+		guard discoveryRefCount>0 else {return}
 		discoveryRefCount-=1
-		assert(discoveryRefCount>=0)
 		if discoveryRefCount==0{
 			browser?.cancel()
 			browser=nil
@@ -322,7 +324,9 @@ public class NearbyConnectionManager : NSObject, NetServiceDelegate, InboundNear
 	}
 	
 	public func addShareExtensionDelegate(_ delegate:ShareExtensionDelegate){
-		shareExtensionDelegates.append(delegate)
+		if !shareExtensionDelegates.contains(where: {$0===delegate}){
+			shareExtensionDelegates.append(delegate)
+		}
 		for service in foundServices.values{
 			guard let device=service.device else {continue}
 			delegate.addDevice(device: device)
@@ -334,7 +338,7 @@ public class NearbyConnectionManager : NSObject, NetServiceDelegate, InboundNear
 	}
 	
 	public func cancelOutgoingTransfer(id:String){
-		guard let transfer=outgoingTransfers[id] else {return}
+		guard let transfer=outgoingTransfers.removeValue(forKey: id) else {return}
 		transfer.connection.cancel()
 	}
 	
@@ -353,14 +357,13 @@ public class NearbyConnectionManager : NSObject, NetServiceDelegate, InboundNear
 	private func maybeAddFoundDevice(service:NWBrowser.Result){
 		#if DEBUG
 		#endif
-		for interface in service.interfaces{
-			if case .loopback=interface.type{
-				#if DEBUG
-				#endif
-				return
-			}
+		let hasNetworkInterface=service.interfaces.contains{
+			if case .loopback=$0.type{return false}
+			return true
 		}
+		guard hasNetworkInterface else{return}
 		guard let endpointID=endpointID(for: service) else {return}
+		guard endpointID != String(bytes: self.endpointID, encoding: .ascii) else {return}
 		#if DEBUG
 		#endif
 		var foundService=FoundServiceInfo(service: service)

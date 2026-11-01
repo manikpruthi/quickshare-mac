@@ -1,6 +1,10 @@
 import AppKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private struct SendHandoff: Decodable {
+        let paths: [String]
+    }
+
     private var statusItem: NSStatusItem?
     private var receiveItem: NSMenuItem?
     private var sendItem: NSMenuItem?
@@ -42,10 +46,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit QuickShare-Mac", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem?.menu = menu
+
+        if CommandLine.arguments.contains("--window-test") {
+            WindowLifecycleTest.run(engine: engine)
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         engine.stopAll()
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        handleIncomingURLs(urls)
+    }
+
+    func handleIncomingURLs(_ urls: [URL]) {
+        for url in urls where url.scheme?.lowercased() == "quickshare" {
+            guard url.host?.lowercased() == "send" || url.path == "/send" else { continue }
+            let files = handoffPaths(from: url).map { URL(fileURLWithPath: $0) }
+            SendWindow.show(engine: engine, files: files)
+        }
+    }
+
+    private func handoffPaths(from url: URL) -> [String] {
+        guard let handoff = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?
+            .first(where: { $0.name == "handoff" })?
+            .value else { return [] }
+        defer { try? FileManager.default.removeItem(atPath: handoff) }
+        guard let data = FileManager.default.contents(atPath: handoff),
+              let payload = try? JSONDecoder().decode(SendHandoff.self, from: data) else { return [] }
+        return payload.paths.filter { FileManager.default.fileExists(atPath: $0) }
     }
 
     @objc private func toggleReceive() {

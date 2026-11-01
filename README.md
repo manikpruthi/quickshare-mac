@@ -9,17 +9,18 @@ Built on the public-domain protocol core from [NearDrop](https://github.com/gris
 ## Features
 
 - **Receive mode toggle** — one click makes the Mac discoverable in any nearby Android phone's Quick Share sheet.
-- **Send to Android** — pick files, pick the phone from the live device list (or scan the QR code), confirm the PIN on both sides.
+- **Send to Android** — pick files, pick the phone from the live device list (or scan the QR code), confirm the PIN on both sides. Devices that become discoverable after the Send window opens are picked up as soon as their mDNS TXT record arrives.
 - **QR-code wake** — phones that are idle don't advertise; scanning the on-screen QR code wakes them straight into the transfer.
 - **PIN confirmation** — a 4-digit code shown on both screens guards every transfer.
 - **On-demand protocol engine** — listeners, browsers and crypto contexts exist only while a mode is active; idle is just a menu-bar process.
-- **mac-explorer integration** — right-click any file → **Quick Share**, plus the standard Share submenu entry.
-- **Universal binary** — Apple Silicon and Intel.
+- **Safe window lifecycle** — closing the Send window tears down browsing and hides the window; the menu-bar app keeps running and can reopen the window any time.
+- **mac-explorer integration** — right-click a file → **Share** → **Quick Share** (first item in the Share submenu).
+- **Native build** — the published DMG targets Apple Silicon; `build.sh` builds for the host architecture (Intel is supported when built on an Intel Mac).
 - **No phone install** — uses Android's built-in Quick Share.
 
 ## Requirements
 
-- macOS 14 or later (Apple Silicon or Intel — the DMG is a universal binary)
+- macOS 14 or later (the published DMG is an Apple Silicon build; build from source on Intel)
 - An Android phone with Quick Share (any brand, any recent Android)
 - Phone and Mac able to reach each other: same Wi-Fi, the phone's hotspot, or any shared LAN
 - Nothing else to install if you use the prebuilt DMG
@@ -31,7 +32,7 @@ Built on the public-domain protocol core from [NearDrop](https://github.com/gris
 ### Easy mode — use the prebuilt DMG (no Xcode needed)
 
 1. Download **[`release/QuickShare-Mac-1.0.0.dmg`](release/QuickShare-Mac-1.0.0.dmg)**
-   (universal: Apple Silicon and Intel).
+   (Apple Silicon; build from source on Intel).
 2. Double-click the DMG to mount it.
 3. Drag **QuickShare-Mac.app** onto the **Applications** shortcut in the window.
 4. Open **Applications**, then **right-click QuickShare-Mac.app → Open** and confirm
@@ -77,9 +78,9 @@ it the Mac stays invisible to phones.
 | Send to Android | Menu bar → **Send to Android…** → Choose Files → pick the phone (open Quick Share on the phone first, or scan the QR code) → Accept on the phone → **Done** closes the window |
 | QR-code wake | Scan the QR code shown in the Send window (regenerates every open), or Copy Link |
 | Stop advertising | Menu bar → **Receive Mode: OFF** |
-| From mac-explorer | Right-click a file → **Quick Share** (or Share submenu) |
+| From mac-explorer | Right-click a file → **Share** → **Quick Share** (first item in the submenu) |
 | From Finder | Right-click → Share → QuickShare-Mac (once the app has run once) |
-| Headless checks | `QuickShare-Mac --self-test`, `QuickShare-Mac --receive-test [secs]`, `QuickShare-Mac --screenshot out.png` |
+| Headless checks | `QuickShare-Mac --self-test`, `QuickShare-Mac --receive-test [secs]`, `QuickShare-Mac --window-test`, `QuickShare-Mac --screenshot out.png` |
 
 Files received land in Downloads with automatic de-duplication (`name (1).ext`).
 
@@ -92,7 +93,12 @@ hostname), UKEY2 handshake (`P-256_SHA512`, `AES_256_CBC-HMAC_SHA256`), then pai
 introduction, consent, chunked file payloads and a 4-digit PIN derived from the auth key.
 
 Phones in Quick Share's receive screen advertise over mDNS, so the Mac's `NWBrowser`
-finds them. Idle phones don't advertise (battery/privacy) — Android normally wakes them
+finds them. Discovery stays live while the Send window is open: an `.added` result can
+arrive before the service's TXT `n` record, so `.changed` updates are applied too — a
+phone that becomes discoverable after the window opens shows up as soon as its TXT record
+lands. Our own endpoint ID and all-loopback results are filtered out to avoid listing the Mac itself.
+
+Idle phones don't advertise (battery/privacy) — Android normally wakes them
 with a Bluetooth LE packet macOS cannot emit, so the QR/intent path
 (`https://quickshare.google/qrcode#key=…`) and the phone's hotspot join are the
 supported wake routes. Sending uses `wifiLan` medium only.
@@ -104,7 +110,8 @@ supported wake routes. Sending uses `wifiLan` medium only.
 - `Sources/Services/ShareEngine.swift` — receive/session lifecycle, consent routing.
 - `Sources/UI/SendWindow.swift` — foreground send window (device list, QR, progress).
 - `Sources/Models/Models.swift` — preferences (destination, auto-off).
-- `Sources/Support/` — `SelfTest` (unit + full handshake loopback), `ReceiveTest`, `Screenshot` harnesses.
+- `Sources/Support/` — `SelfTest` (unit + full handshake loopback), `ReceiveTest`, `Screenshot`,
+  and `WindowLifecycleTest` (Send-window open/close, late device discovery, handoff) harnesses.
 - `ShareExtension/` — reserved for the bundled share extension (wires into Finder/mac-explorer Share menus).
 
 There is one subprocess pattern only: none at runtime — everything is in-process
@@ -140,6 +147,9 @@ APP="$HOME/Library/Caches/QuickShareMacBuild/QuickShare-Mac.app/Contents/MacOS/Q
 # Advertise for N seconds (check from the phone's Quick Share sheet)
 "$APP" --receive-test 60
 
+# Send-window lifecycle + late discovery + quickshare:// handoff regression test
+"$APP" --window-test
+
 # In-app snapshot capture (works without Screen Recording permission)
 "$APP" --screenshot /tmp/quickshare.png
 ```
@@ -148,7 +158,8 @@ Screenshots in `docs/screenshots/` were generated with the same harness.
 
 Manual end-to-end checks: receive-ON visible via `dns-sd -B _FC9F5ED42C8A._tcp local`;
 Mac → phone send with PIN match; QR-code wake path; hotspot-join path without home
-Wi-Fi; mac-explorer right-click → Quick Share delivery.
+Wi-Fi; phone made discoverable after opening Send; close/reopen Send window 5×;
+mac-explorer right-click → Share → Quick Share delivery.
 
 ## Known limitations
 
@@ -162,6 +173,16 @@ Wi-Fi; mac-explorer right-click → Quick Share delivery.
 - Play Services updates can break the reverse-engineered protocol without notice.
 
 Not affiliated with Google. Android and Quick Share are trademarks of Google LLC.
+
+## Provenance
+
+QuickShare-Mac is **forked from [NearDrop](https://github.com/grishka/NearDrop) by Grishka**
+(UNLICENSE / public domain). The vendored `Sources/Core/` protocol layer — Nearby Share
+advertisement/browsing, UKEY2, SecureMessage, inbound/outbound connections, and the protobuf
+definitions under `Sources/Core/ProtobufSource/` — originates there; original copyright headers
+are retained in the source files. This project ports that core to macOS-native Swift where needed
+and adds its own menu-bar shell, Send window, QR/PIN UI, mac-explorer `quickshare://` handoff,
+tests, packaging, and documentation. It is not affiliated with Google.
 
 ## License
 

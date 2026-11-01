@@ -19,20 +19,22 @@ func qrImage(from string: String, size: CGFloat) -> NSImage? {
 }
 
 final class SendWindow: NSObject {
-    static func show(engine: ShareEngine) {
+    static func show(engine: ShareEngine, files: [URL] = []) {
         _ = engine
-        SendController.show()
+        SendController.show(files: files)
     }
 }
 
-final class SendController: NSObject, NSTableViewDataSource, NSTableViewDelegate, ShareExtensionDelegate {
+final class SendController: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate, ShareExtensionDelegate {
     private static var shared: SendController?
 
     private var window: NSWindow?
-    private var closeObserver: NSObjectProtocol?
     private var devices: [RemoteDeviceInfo] = []
     private var selectedURLs: [URL] = []
     private var currentDeviceID: String?
+    private var isTornDown = true
+    private var didRegisterDelegate = false
+    private var didStartDiscovery = false
 
     private var tableView: NSTableView!
     private var fileCountLabel: NSTextField!
@@ -46,41 +48,71 @@ final class SendController: NSObject, NSTableViewDataSource, NSTableViewDelegate
     private var cancelButton: NSButton?
     private var doneButton: NSButton?
 
-    static func show() {
-        NSApp.setActivationPolicy(.regular)
-        if shared == nil {
+    static func show(files: [URL] = []) {
+        if let controller = shared {
+            controller.present(files: files)
+        } else {
             let controller = SendController()
             shared = controller
-            controller.openWindow()
-        } else {
-            shared?.window?.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            controller.openWindow(files: files)
         }
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     static var screenshotWindow: NSWindow? { shared?.window }
+
+    static var windowIsVisible: Bool { shared?.window?.isVisible ?? false }
+
+    static var selectedFileCount: Int { shared?.selectedURLs.count ?? 0 }
+
+    static var discoveredDeviceNames: [String] { shared?.devices.map(\.name) ?? [] }
 
     static func closeWindow() {
         shared?.window?.close()
     }
 
-    private func openWindow() {
+    private func openWindow(files: [URL]) {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 620),
                               styleMask: [.titled, .closable, .miniaturizable],
                               backing: .buffered, defer: false)
         window.title = "Send to Android"
+        window.isReleasedWhenClosed = false
+        window.delegate = self
         window.center()
         buildViews(into: window)
         self.window = window
-        closeObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.willCloseNotification, object: window, queue: .main
-        ) { [weak self] _ in self?.teardown() }
-        NearbyConnectionManager.shared.addShareExtensionDelegate(self)
-        NearbyConnectionManager.shared.startDeviceDiscovery()
+        activateDiscovery()
+        resetTransferUI()
+        if !files.isEmpty {
+            setSelectedFiles(files)
+        }
         refreshQR()
-        setStatus("Searching for nearby Android devices…")
+        setStatus(devices.isEmpty ? "Searching for nearby Android devices…" : "\(devices.count) device(s) nearby — pick one and press Send")
         window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func present(files: [URL]) {
+        isTornDown = false
+        activateDiscovery()
+        resetTransferUI()
+        if !files.isEmpty {
+            setSelectedFiles(files)
+        }
+        refreshQR()
+        setStatus(devices.isEmpty ? "Searching for nearby Android devices…" : "\(devices.count) device(s) nearby — pick one and press Send")
+        window?.makeKeyAndOrderFront(nil)
+    }
+
+    private func activateDiscovery() {
+        isTornDown = false
+        if !didRegisterDelegate {
+            NearbyConnectionManager.shared.addShareExtensionDelegate(self)
+            didRegisterDelegate = true
+        }
+        if !didStartDiscovery {
+            NearbyConnectionManager.shared.startDeviceDiscovery()
+            didStartDiscovery = true
+        }
     }
 
     private func buildViews(into window: NSWindow) {
@@ -175,17 +207,67 @@ final class SendController: NSObject, NSTableViewDataSource, NSTableViewDelegate
         content.addSubview(statusLabel)
     }
 
-    private func teardown() {
-        NearbyConnectionManager.shared.stopDeviceDiscovery()
-        NearbyConnectionManager.shared.clearQrCodeKey()
-        NearbyConnectionManager.shared.removeShareExtensionDelegate(self)
-        NSApp.setActivationPolicy(.accessory)
-        if let observer = closeObserver {
-            NotificationCenter.default.removeObserver(observer)
-            closeObserver = nil
+    // MARK: - Window lifecycle
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard sender === window else { return true }
+        beginTeardown()
+        DispatchQueue.main.async { [weak self] in self?.finishTeardown() }
+        return false
+    }
+
+    private func beginTeardown() {
+        guard !isTornDown else { return }
+        isTornDown = true
+        if let id = currentDeviceID {
+            NearbyConnectionManager.shared.cancelOutgoingTransfer(id: id)
+            currentDeviceID = nil
         }
-        window = nil
-        SendController.shared = nil
+        progressBar?.stopAnimation(nil)
+        progressBar?.isIndeterminate = false
+        if didRegisterDelegate {
+            NearbyConnectionManager.shared.removeShareExtensionDelegate(self)
+            didRegisterDelegate = false
+        }
+        if didStartDiscovery {
+            NearbyConnectionManager.shared.stopDeviceDiscovery()
+            didStartDiscovery = false
+        }
+        NearbyConnectionManager.shared.clearQrCodeKey()
+        devices.removeAll()
+        tableView?.reloadData()
+        window?.orderOut(nil)
+    }
+
+    private func finishTeardown() {
+        guard isTornDown, let window else { return }
+        window.delegate = nil
+        self.window = nil
+        if SendController.shared === self {
+            SendController.shared = nil
+        }
+    }
+
+    private func resetTransferUI() {
+        currentDeviceID = nil
+        progressBar?.stopAnimation(nil)
+        progressBar?.isIndeterminate = false
+        progressBar?.doubleValue = 0
+        pinLabel?.stringValue = ""
+        sendButton?.isHidden = false
+        cancelButton?.isHidden = false
+        doneButton?.isHidden = true
+        setStatus("Searching for nearby Android devices…")
+    }
+
+    private func setSelectedFiles(_ urls: [URL]) {
+        selectedURLs = urls.filter { FileManager.default.fileExists(atPath: $0.path) }
+        fileCountLabel?.stringValue = selectedURLs.isEmpty
+            ? "No files chosen"
+            : "\(selectedURLs.count) file(s) chosen"
+        if !selectedURLs.isEmpty {
+            setStatus("Now pick a device and press Send")
+        }
     }
 
     private func setStatus(_ text: String) {
@@ -206,8 +288,7 @@ final class SendController: NSObject, NSTableViewDataSource, NSTableViewDelegate
         panel.canChooseFiles = true
         panel.prompt = "Choose"
         guard panel.runModal() == .OK else { return }
-        selectedURLs = panel.urls
-        fileCountLabel?.stringValue = "\(selectedURLs.count) file(s) chosen"
+        setSelectedFiles(panel.urls)
         setStatus("Now pick a device and press Send")
     }
 
@@ -308,20 +389,22 @@ final class SendController: NSObject, NSTableViewDataSource, NSTableViewDelegate
     // MARK: - ShareExtensionDelegate
 
     func addDevice(device: RemoteDeviceInfo) {
-        DispatchQueue.main.async {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.isTornDown else { return }
             if let id = device.id {
                 guard !self.devices.contains(where: { $0.id == id }) else { return }
             }
             self.devices.append(device)
-            self.tableView.reloadData()
+            self.tableView?.reloadData()
             self.setStatus("\(self.devices.count) device(s) nearby — pick one and press Send")
         }
     }
 
     func removeDevice(id: String) {
-        DispatchQueue.main.async {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.isTornDown else { return }
             self.devices.removeAll { $0.id == id }
-            self.tableView.reloadData()
+            self.tableView?.reloadData()
             if self.devices.isEmpty {
                 self.setStatus("Searching for nearby Android devices…")
             }
@@ -329,9 +412,10 @@ final class SendController: NSObject, NSTableViewDataSource, NSTableViewDelegate
     }
 
     func startTransferWithQrCode(device: RemoteDeviceInfo) {
-        DispatchQueue.main.async {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.isTornDown else { return }
             if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
-                self.tableView.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+                self.tableView?.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
             }
             guard let id = device.id else { return }
             if self.selectedURLs.isEmpty {
@@ -344,50 +428,57 @@ final class SendController: NSObject, NSTableViewDataSource, NSTableViewDelegate
     }
 
     func connectionWasEstablished(pinCode: String) {
-        DispatchQueue.main.async {
-            self.progressBar.stopAnimation(nil)
-            self.progressBar.isIndeterminate = false
-            self.progressBar.doubleValue = 0
-            self.pinLabel.stringValue = "Confirm on phone — PIN: \(pinCode)"
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.isTornDown else { return }
+            self.progressBar?.stopAnimation(nil)
+            self.progressBar?.isIndeterminate = false
+            self.progressBar?.doubleValue = 0
+            self.pinLabel?.stringValue = "Confirm on phone — PIN: \(pinCode)"
             self.setStatus("Connected — waiting for the phone to accept…")
         }
     }
 
     func connectionFailed(with error: Error) {
-        DispatchQueue.main.async {
-            self.progressBar.stopAnimation(nil)
-            self.progressBar.isIndeterminate = false
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.isTornDown else { return }
+            self.progressBar?.stopAnimation(nil)
+            self.progressBar?.isIndeterminate = false
             self.currentDeviceID = nil
-            self.pinLabel.stringValue = ""
+            self.pinLabel?.stringValue = ""
             self.setStatus("Failed: \(error.localizedDescription)")
         }
     }
 
     func transferAccepted() {
-        DispatchQueue.main.async {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.isTornDown else { return }
             self.setStatus("Accepted — sending…")
         }
     }
 
     func transferProgress(progress: Double) {
-        DispatchQueue.main.async {
-            self.progressBar.doubleValue = progress * 100
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.isTornDown else { return }
+            self.progressBar?.doubleValue = progress * 100
             self.setStatus(String(format: "Sending… %.0f%%", progress * 100))
         }
     }
 
     func transferFinished() {
-        DispatchQueue.main.async {
-            self.progressBar.stopAnimation(nil)
-            self.progressBar.isIndeterminate = false
-            self.progressBar.doubleValue = 100
-            self.pinLabel.stringValue = ""
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.isTornDown else { return }
+            self.progressBar?.stopAnimation(nil)
+            self.progressBar?.isIndeterminate = false
+            self.progressBar?.doubleValue = 100
+            self.pinLabel?.stringValue = ""
             self.currentDeviceID = nil
             self.setStatus("Complete — files delivered to the Android phone")
             self.sendButton?.isHidden = true
             self.cancelButton?.isHidden = true
             self.doneButton?.isHidden = false
-            self.window?.makeFirstResponder(self.doneButton)
+            if let doneButton = self.doneButton {
+                self.window?.makeFirstResponder(doneButton)
+            }
         }
     }
 

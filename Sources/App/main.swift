@@ -31,6 +31,7 @@ if args.contains("--help") || args.contains("-h") {
       QuickShare-Mac              Launch menu-bar app
       QuickShare-Mac --self-test  Run protocol unit tests
       QuickShare-Mac --receive-test [secs]  Advertise and log inbound connections
+      QuickShare-Mac --window-test  Open/close the Send window and handoff test
       QuickShare-Mac --help       This help
     """)
     exit(0)
