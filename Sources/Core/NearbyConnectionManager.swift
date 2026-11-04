@@ -146,20 +146,30 @@ struct EndpointInfo{
 		self.qrCodeData=qrCodeData
 	}
 
+	// Nearby Connections drops endpoint info longer than 131 bytes: header(1) + salt/key hash(16) + length(1) + name.
+	static let maxSerializedLength=131
+	static let maxNameBytes=maxSerializedLength-18
+
 	func serialize()->Data{
 		var endpointInfo:[UInt8]=[UInt8(deviceType.rawValue << 1)]
 		for _ in 0...15{
 			endpointInfo.append(UInt8.random(in: 0...255))
 		}
-		var nameChars=[UInt8]((name ?? "Mac").utf8)
-		if nameChars.count>255{
-			nameChars=[UInt8](nameChars[0..<255])
-		}
+		let nameChars=EndpointInfo.truncatedUTF8(name ?? "Mac", maxBytes: EndpointInfo.maxNameBytes)
 		endpointInfo.append(UInt8(nameChars.count))
-		for ch in nameChars{
-			endpointInfo.append(UInt8(ch))
-		}
+		endpointInfo.append(contentsOf: nameChars)
 		return Data(endpointInfo)
+	}
+
+	// Cuts on a character boundary so a long name never ends in a broken UTF-8 sequence.
+	static func truncatedUTF8(_ string:String, maxBytes:Int)->[UInt8]{
+		var out:[UInt8]=[]
+		for ch in string{
+			let bytes=Array(String(ch).utf8)
+			if out.count+bytes.count>maxBytes{break}
+			out.append(contentsOf: bytes)
+		}
+		return out
 	}
 }
 
@@ -212,6 +222,11 @@ public class NearbyConnectionManager : NSObject, NetServiceDelegate, InboundNear
 	private var qrCodeNameEncryptionKey:SymmetricKey?
 	private var qrCodeData:Data?
 
+	private var pathMonitor:NWPathMonitor?
+	private var lanInterfaceOrder:[String]=[]
+	private var advertisedEndpointInfo:Data?
+	private var advertisedIPv4:String?
+
 	public static let shared=NearbyConnectionManager()
 
 	override init() {
@@ -226,16 +241,21 @@ public class NearbyConnectionManager : NSObject, NetServiceDelegate, InboundNear
 		}
 		guard tcpListener != nil else {return}
 		isVisible=true
+		startPathMonitor()
 		startTCPListener()
 	}
 
 	public func stopVisible(){
 		guard isVisible else {return}
 		isVisible=false
+		pathMonitor?.cancel()
+		pathMonitor=nil
 		tcpListener?.cancel()
 		tcpListener=nil
 		mdnsService?.stop()
 		mdnsService = nil
+		advertisedEndpointInfo=nil
+		advertisedIPv4=nil
 		stateLock.lock()
 		let conns=Array(activeConnections.values)
 		stateLock.unlock()
@@ -249,9 +269,14 @@ public class NearbyConnectionManager : NSObject, NetServiceDelegate, InboundNear
 
 	private func startTCPListener(){
 		guard let listener=tcpListener else {return}
-		listener.stateUpdateHandler={[weak self] (state:NWListener.State) in
+		listener.stateUpdateHandler={[weak self, weak listener] (state:NWListener.State) in
 			if case .ready = state {
-				self?.initMDNS()
+				// NetService needs a running run loop for its callbacks and later TXT updates.
+				DispatchQueue.main.async {
+					guard let listener else {return}
+					guard let self=self, self.isVisible, self.tcpListener===listener else {return}
+					self.initMDNS()
+				}
 			}
 		}
 		listener.newConnectionHandler={[weak self] (connection:NWConnection) in
@@ -284,18 +309,83 @@ public class NearbyConnectionManager : NSObject, NetServiceDelegate, InboundNear
 			0, 0
 		]
 		let name=Data(nameBytes).urlSafeBase64EncodedString()
-		let deviceName=QSPreferences.load().deviceName.isEmpty ? (Host.current().localizedName ?? "Mac") : QSPreferences.load().deviceName
-		let endpointInfo=EndpointInfo(name: deviceName, deviceType: .computer)
+		let prefsName=QSPreferences.load().deviceName
+		let deviceName=prefsName.isEmpty ? (Host.current().localizedName ?? "Mac") : prefsName
+		let endpointInfo=EndpointInfo(name: deviceName, deviceType: .computer).serialize()
 
 		guard let port=tcpListener?.port else {return}
 		let portNum:Int32=Int32(port.rawValue)
 		mdnsService?.stop()
 		mdnsService=NetService(domain: "", type: "_FC9F5ED42C8A._tcp.", name: name, port: portNum)
 		mdnsService?.delegate=self
-		if let txt=endpointInfo.serialize().urlSafeBase64EncodedString().data(using: .utf8){
-			mdnsService?.setTXTRecord(NetService.data(fromTXTRecord: ["n": txt]))
-		}
+		advertisedEndpointInfo=endpointInfo
+		advertisedIPv4=NearbyConnectionManager.lanIPv4Address(preferredInterfaces: lanInterfaceOrder)
+		mdnsService?.setTXTRecord(currentTXTRecord())
 		mdnsService?.publish()
+	}
+
+	// Google's own Quick Share publishes the receiver's LAN address as TXT "IPv4" and falls back to it
+	// when the host's A record doesn't resolve; current Pixel builds expect it.
+	private func currentTXTRecord()->Data{
+		var txt:[String:Data]=[:]
+		if let info=advertisedEndpointInfo, let n=info.urlSafeBase64EncodedString().data(using: .utf8){
+			txt["n"]=n
+		}
+		if let ip=advertisedIPv4, let v=ip.data(using: .utf8){
+			txt["IPv4"]=v
+		}
+		return NetService.data(fromTXTRecord: txt)
+	}
+
+	private func startPathMonitor(){
+		pathMonitor?.cancel()
+		let monitor=NWPathMonitor()
+		monitor.pathUpdateHandler={[weak self] path in
+			guard let self=self, self.isVisible else {return}
+			self.lanInterfaceOrder=path.availableInterfaces
+				.filter{$0.type == .wifi || $0.type == .wiredEthernet}
+				.map{$0.name}
+			self.refreshAdvertisedAddress()
+		}
+		pathMonitor=monitor
+		monitor.start(queue: .main)
+	}
+
+	// Keeps TXT "IPv4" right after a Wi-Fi switch or DHCP renewal without re-registering the service.
+	private func refreshAdvertisedAddress(){
+		guard let service=mdnsService, advertisedEndpointInfo != nil else {return}
+		let ip=NearbyConnectionManager.lanIPv4Address(preferredInterfaces: lanInterfaceOrder)
+		guard ip != advertisedIPv4 else {return}
+		advertisedIPv4=ip
+		service.setTXTRecord(currentTXTRecord())
+	}
+
+	// First usable IPv4 on a Wi-Fi/Ethernet interface, in the system's preference order.
+	static func lanIPv4Address(preferredInterfaces:[String])->String?{
+		var head:UnsafeMutablePointer<ifaddrs>?
+		guard getifaddrs(&head)==0, let first=head else {return nil}
+		defer{freeifaddrs(head)}
+		var byInterface:[String:String]=[:]
+		var fallback:String?
+		for ptr in sequence(first: first, next: {$0.pointee.ifa_next}){
+			let ifa=ptr.pointee
+			guard let addr=ifa.ifa_addr, addr.pointee.sa_family==sa_family_t(AF_INET) else {continue}
+			let flags=Int32(ifa.ifa_flags)
+			guard flags & IFF_UP != 0, flags & IFF_RUNNING != 0, flags & IFF_LOOPBACK == 0 else {continue}
+			var sin=sockaddr_in()
+			memcpy(&sin, addr, MemoryLayout<sockaddr_in>.size)
+			var buf=[CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+			guard inet_ntop(AF_INET, &sin.sin_addr, &buf, socklen_t(INET_ADDRSTRLEN)) != nil else {continue}
+			let ip=String(cString: buf)
+			guard !ip.hasPrefix("169.254.") else {continue}
+			let name=String(cString: ifa.ifa_name)
+			if byInterface[name]==nil{byInterface[name]=ip}
+			if fallback==nil, name.hasPrefix("en"){fallback=ip}
+		}
+		for name in preferredInterfaces{
+			if let ip=byInterface[name]{return ip}
+		}
+		return fallback
 	}
 
 	func obtainUserConsent(for transfer: TransferMetadata, from device: RemoteDeviceInfo, connection: InboundNearbyConnection) {

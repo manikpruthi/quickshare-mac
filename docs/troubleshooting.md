@@ -10,6 +10,14 @@
 2. macOS: **System Settings → Privacy & Security → Local Network** — QuickShare-Mac must be allowed. Toggle off/on if it was denied.
 3. Menu bar: **Receive Mode: ON** (auto-off may have kicked in — check Preferences).
 4. Some Android skins need **Quick Share → Phone visibility → Everyone** or contacts mode.
+5. **Restart the phone** if one phone sees the Mac and another doesn't on the same Wi-Fi. A Pixel
+   can get its mDNS cache stuck: it keeps the Mac's record (with an absurd ~29 h TTL) but Quick Share
+   never lists it. A reboot clears it. This was seen in Nov 2026.
+6. Check what the Mac advertises: `dns-sd -B _FC9F5ED42C8A._tcp local`, then
+   `dns-sd -L <instance> _FC9F5ED42C8A._tcp local`. The Mac's entry shows `n=` (name) and
+   `IPv4=` (its LAN address). If that's there and another phone lists the Mac, the Mac side is fine.
+7. If Quick Share has **Share with Apple devices**, turn it off. With it on, some phones leave Wi-Fi
+   while the share sheet is open and only find Bluetooth LE receivers, which QuickShare-Mac can't be yet.
 
 ## Phone sees the Mac but connect fails
 - Confirm the **4-digit PIN** matches on both screens.

@@ -40,6 +40,14 @@ enum SelfTest {
         guard let back = EndpointInfo(data: data) else { throw TestErr.bad("parse nil") }
         guard back.name == "TestMac" else { throw TestErr.bad("name mismatch: \(back.name ?? "nil")") }
         guard back.deviceType == .computer else { throw TestErr.bad("type mismatch") }
+
+        // A long multi-byte name must still fit Nearby's 131-byte limit and stay valid UTF-8.
+        let long = String(repeating: "Manik’s MacBook Neo ", count: 10)
+        let longData = EndpointInfo(name: long, deviceType: .computer).serialize()
+        guard longData.count <= EndpointInfo.maxSerializedLength else { throw TestErr.bad("long name not capped: \(longData.count) bytes") }
+        guard let longBack = EndpointInfo(data: longData), let name = longBack.name, long.hasPrefix(name), !name.isEmpty else {
+            throw TestErr.bad("long name not a clean prefix")
+        }
     }
 
     private static func testVarint() throws {

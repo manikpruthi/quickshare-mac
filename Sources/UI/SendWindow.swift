@@ -34,7 +34,6 @@ final class SendController: NSObject, NSTableViewDataSource, NSTableViewDelegate
     private var stagedZips: [URL] = []
     private var selectedFiles: [URL] = []
     private var currentDeviceID: String?
-    private var currentDeviceName: String?
     private var messageText: String = ""
     private var sendMode: SendMode = .files
     private var isTornDown = true
@@ -59,9 +58,7 @@ final class SendController: NSObject, NSTableViewDataSource, NSTableViewDelegate
     private var qrURL: String = ""
     private var qrCacheKey: String = ""
     private var sendButton: NSButton?
-    private var cancelButton: NSButton?
     private var doneButton: NSButton?
-    private var revealButton: NSButton?
     private var messageField: NSTextField?
     private var modeSeg: NSSegmentedControl?
 
@@ -202,22 +199,12 @@ final class SendController: NSObject, NSTableViewDataSource, NSTableViewDelegate
         sendButton?.keyEquivalent = "\r"
         content.addSubview(sendButton!)
 
-        cancelButton = NSButton(title: "Cancel", target: self, action: #selector(cancelTransfer))
-        cancelButton?.frame = NSRect(x: 180, y: 312, width: 110, height: 32)
-        cancelButton?.bezelStyle = .rounded
-        content.addSubview(cancelButton!)
-
         doneButton = NSButton(title: "Done", target: self, action: #selector(done))
         doneButton?.frame = NSRect(x: 20, y: 312, width: 150, height: 32)
         doneButton?.bezelStyle = .rounded
         doneButton?.keyEquivalent = "\r"
         doneButton?.isHidden = true
         content.addSubview(doneButton!)
-
-        revealButton = NSButton(title: "History", target: self, action: #selector(showHistory))
-        revealButton?.frame = NSRect(x: 300, y: 312, width: 160, height: 32)
-        revealButton?.bezelStyle = .rounded
-        content.addSubview(revealButton!)
 
         pinLabel = NSTextField(labelWithString: "")
         pinLabel.frame = NSRect(x: 20, y: 282, width: 440, height: 24)
@@ -308,7 +295,6 @@ final class SendController: NSObject, NSTableViewDataSource, NSTableViewDelegate
 
     private func resetTransferUI() {
         currentDeviceID = nil
-        currentDeviceName = nil
         transferStart = nil
         lastProgressValue = 0
         progressBar?.stopAnimation(nil)
@@ -317,7 +303,6 @@ final class SendController: NSObject, NSTableViewDataSource, NSTableViewDelegate
         speedLabel?.stringValue = ""
         pinLabel?.stringValue = ""
         sendButton?.isHidden = false
-        cancelButton?.isHidden = false
         doneButton?.isHidden = true
         setStatus("Searching for nearby Android devices…")
     }
@@ -425,7 +410,6 @@ final class SendController: NSObject, NSTableViewDataSource, NSTableViewDelegate
 
     private func beginTransfer(deviceID: String) {
         currentDeviceID = deviceID
-        currentDeviceName = devices.first(where: { $0.id == deviceID })?.name
         transferStart = Date()
         lastProgressAt = Date()
         lastProgressValue = 0
@@ -451,39 +435,11 @@ final class SendController: NSObject, NSTableViewDataSource, NSTableViewDelegate
         NearbyConnectionManager.shared.startOutgoingTransfer(deviceID: deviceID, delegate: self, urls: urls)
     }
 
-    @objc private func cancelTransfer() {
-        if let id = currentDeviceID {
-            NearbyConnectionManager.shared.cancelOutgoingTransfer(id: id)
-            currentDeviceID = nil
-        }
-        progressBar.stopAnimation(nil)
-        progressBar.isIndeterminate = false
-        progressBar.doubleValue = 0
-        speedLabel.stringValue = ""
-        pinLabel.stringValue = ""
-        setStatus("Cancelled")
-    }
-
     @objc private func copyLink() {
         guard !qrURL.isEmpty else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(qrURL, forType: .string)
         setStatus("Link copied — open it on the phone if the camera won't scan")
-    }
-
-    @objc private func showHistory() {
-        let entries = HistoryStore.shared.entries.prefix(10)
-        if entries.isEmpty {
-            setStatus("No transfers yet")
-            return
-        }
-        let fmt = DateFormatter()
-        fmt.dateStyle = .short
-        fmt.timeStyle = .short
-        let lines = entries.map { e in
-            "\(e.direction == .sent ? "↑" : "↓") \(e.deviceName) — \(e.fileCount) file(s) — \(fmt.string(from: e.date))"
-        }
-        setStatus(lines.prefix(2).joined(separator: "  •  "))
     }
 
     // MARK: - NSTableViewDataSource
@@ -709,15 +665,6 @@ final class SendController: NSObject, NSTableViewDataSource, NSTableViewDelegate
     func transferFinished() {
         DispatchQueue.main.async { [weak self] in
             guard let self = self, !self.isTornDown else { return }
-            let count = self.selectedURLs.count
-            var bytes: Int64 = 0
-            for url in self.selectedURLs {
-                if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
-                   let size = attrs[.size] as? NSNumber {
-                    bytes += size.int64Value
-                }
-            }
-            HistoryStore.shared.record(direction: .sent, deviceName: self.currentDeviceName, fileCount: count, bytes: bytes, success: true)
             self.cleanupStagedZips()
             self.selectedFiles.removeAll()
             self.fileListView?.reloadData()
@@ -728,10 +675,8 @@ final class SendController: NSObject, NSTableViewDataSource, NSTableViewDelegate
             self.speedLabel?.stringValue = ""
             self.pinLabel?.stringValue = ""
             self.currentDeviceID = nil
-            self.currentDeviceName = nil
             self.setStatus("Complete — files delivered to the Android phone")
             self.sendButton?.isHidden = true
-            self.cancelButton?.isHidden = true
             self.doneButton?.isHidden = false
             if let doneButton = self.doneButton {
                 self.window?.makeFirstResponder(doneButton)

@@ -91,7 +91,6 @@ extension ShareEngine: MainAppDelegate {
 
     func incomingTransfer(id: String, didFinishWith error: Error?, files: [URL]) {
         if error == nil, !files.isEmpty {
-            HistoryStore.shared.record(direction: .received, deviceName: nil, fileCount: files.count, bytes: -1, success: true)
             notifyReceived(files: files)
         }
         delegate?.engineDidUpdateStatus()

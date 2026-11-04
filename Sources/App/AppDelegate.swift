@@ -9,7 +9,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var receiveItem: NSMenuItem?
     private var prefsItem: NSMenuItem?
-    private var recentMenu: NSMenu?
     private var statusLine: NSMenuItem?
     private var engine = ShareEngine()
     private var consentQueue: [(transfer: TransferMetadata, device: RemoteDeviceInfo, accept: (Bool) -> Void)] = []
@@ -44,12 +43,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         prefs.target = self
         menu.addItem(prefs)
         prefsItem = prefs
-
-        let recent = NSMenuItem(title: "Recent Transfers", action: nil, keyEquivalent: "")
-        let submenu = NSMenu()
-        recent.submenu = submenu
-        recentMenu = submenu
-        menu.addItem(recent)
 
         menu.addItem(.separator())
         let status = NSMenuItem(title: "Status: idle", action: nil, keyEquivalent: "")
@@ -120,35 +113,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         PrefsWindow.show(engine: engine)
     }
 
-    @objc private func revealRecent(_ sender: NSMenuItem) {
-        guard let path = sender.representedObject as? String else { return }
-        NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "")
-    }
-
     private func refresh() {
         receiveItem?.title = engine.isReceiving ? "Receive Mode: ON" : "Receive Mode: OFF"
         statusLine?.title = engine.statusText
-        rebuildRecent()
-    }
-
-    private func rebuildRecent() {
-        recentMenu?.removeAllItems()
-        let entries = HistoryStore.shared.entries.prefix(10)
-        if entries.isEmpty {
-            let item = NSMenuItem(title: "No transfers yet", action: nil, keyEquivalent: "")
-            item.isEnabled = false
-            recentMenu?.addItem(item)
-            return
-        }
-        let fmt = DateFormatter()
-        fmt.dateStyle = .short
-        fmt.timeStyle = .short
-        for e in entries {
-            let arrow = e.direction == .sent ? "↑" : "↓"
-            let item = NSMenuItem(title: "\(arrow) \(e.deviceName) — \(e.fileCount) file(s) — \(fmt.string(from: e.date))", action: nil, keyEquivalent: "")
-            item.isEnabled = false
-            recentMenu?.addItem(item)
-        }
     }
 }
 

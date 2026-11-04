@@ -79,11 +79,10 @@ it the Mac stays invisible to phones.
 | Action | How |
 | --- | --- |
 | Receive from Android | Menu bar → **Receive Mode: ON**, then on the phone: Gallery/Files → Share → Quick Share → your Mac → match the PIN → Accept on the Mac |
-| Send to Android | Menu bar → **Send to Android…** → Choose Files (or drag-drop; folders are zipped) or switch to **Message** tab for a link/text → pick the phone (open Quick Share on the phone first, or scan the QR code) → Accept on the phone → **Done** closes the window |
+| Send to Android | Menu bar → **Send to Android…** → Choose Files (or drag-drop; folders are zipped) or switch to **Message** tab for a link/text → pick the phone (open Quick Share on the phone first, or scan the QR code) → Accept on the phone → **Done** closes the window. Closing the window mid-transfer cancels it |
 | QR-code wake | Scan the QR code shown in the Send window (regenerates per open), or Copy Link |
 | Stop advertising | Menu bar → **Receive Mode: OFF** (also auto-offs after N minutes — see Preferences) |
 | Preferences | Menu bar → **Preferences…** → download folder, device name, auto-off timer, auto-accept |
-| Recent transfers | Menu bar → **Recent Transfers** submenu, or **History** button in the Send window |
 | From mac-explorer | Right-click a file → **Share** → **Quick Share** (first item in the submenu) |
 | From Finder | Right-click → Share → QuickShare-Mac (once the app has run once) |
 | Headless checks | `QuickShare-Mac --self-test`, `QuickShare-Mac --receive-test [secs]`, `QuickShare-Mac --window-test`, `QuickShare-Mac --screenshot out.png` |
@@ -95,7 +94,9 @@ Files received land in your chosen download folder (Preferences, default Downloa
 QuickShare-Mac speaks the reverse-engineered Nearby Share / Quick Share wire protocol:
 ephemeral `NWListener` + `NetService` advertisement on `_FC9F5ED42C8A._tcp` (name = PCP
 `0x23` + 4-byte endpoint ID + service hash; TXT `n` = version/visibility/device-type +
-hostname), UKEY2 handshake (`P-256_SHA512`, `AES_256_CBC-HMAC_SHA256`), then paired-key,
+device name, capped at Nearby's 131-byte endpoint-info limit; TXT `IPv4` = the Mac's LAN
+address, matching what Google's own implementations and Android phones publish as an address
+fallback; it is refreshed when Wi-Fi changes), UKEY2 handshake (`P-256_SHA512`, `AES_256_CBC-HMAC_SHA256`), then paired-key,
 introduction, consent, chunked file payloads and a 4-digit PIN derived from the auth key.
 
 Phones in Quick Share's receive screen advertise over mDNS, so the Mac's `NWBrowser`
@@ -116,10 +117,9 @@ supported wake routes. Sending uses `wifiLan` medium only.
 - `Sources/App/` — `main.swift` (menu-bar entry + `--self-test`/`--receive-test`/`--screenshot` harnesses), `AppDelegate` (status item, receive toggle, send window).
 - `Sources/Core/` — vendored Nearby Share core: `NearbyConnectionManager` (advertise/browse/QR), `NearbyConnection` (framing, UKEY2, SecureMessage AES-CBC+HMAC, sequence checks), `InboundNearbyConnection` (receive + Downloads finalize), `OutboundNearbyConnection` (send + progress), `P256EC` (CryptoKit ECDH/ECDSA shim), `ProtoCompatWriter` (test varint codec), `Protobuf/*.pb.swift` + `ProtobufSource/*.proto`.
 - `Sources/Services/ShareEngine.swift` — receive/session lifecycle, consent routing.
-- `Sources/UI/SendWindow.swift` — foreground send window (device list, file list, message tab, QR, speed/ETA progress, history).
+- `Sources/UI/SendWindow.swift` — foreground send window (device list, file list, message tab, QR, speed/ETA progress).
 - `Sources/UI/PrefsWindow.swift` — preferences window (download folder, device name, auto-off, auto-accept).
 - `Sources/Models/Models.swift` — `QSPreferences` (UserDefaults + security-scoped bookmark).
-- `Sources/Models/HistoryStore.swift` — JSONL transfer history (`Application Support/QuickShare/history.jsonl`).
 - `Sources/Support/` — `SelfTest` (unit + full handshake loopback), `ReceiveTest`, `Screenshot`,
   and `WindowLifecycleTest` (Send-window open/close, late device discovery, handoff) harnesses.
 - `ShareExtension/` — reserved for the bundled share extension (wires into Finder/mac-explorer Share menus). Until then, Finder/mac-explorer use the `quickshare://send?handoff=` URL flow (hardened: temp-dir only, 1 MB cap). See `docs/troubleshooting.md`.
@@ -166,7 +166,8 @@ APP="$HOME/Library/Caches/QuickShareMacBuild/QuickShare-Mac.app/Contents/MacOS/Q
 
 Screenshots in `docs/screenshots/` were generated with the same harness.
 
-Manual end-to-end checks: receive-ON visible via `dns-sd -B _FC9F5ED42C8A._tcp local`;
+Manual end-to-end checks: receive-ON visible via `dns-sd -B _FC9F5ED42C8A._tcp local`
+(`dns-sd -L <instance> _FC9F5ED42C8A._tcp local` shows both `n=` and `IPv4=`);
 Mac → phone send with PIN match; QR-code wake path; hotspot-join path without home
 Wi-Fi; phone made discoverable after opening Send; close/reopen Send window 5×;
 mac-explorer right-click → Share → Quick Share delivery.
@@ -180,6 +181,9 @@ mac-explorer right-click → Share → Quick Share delivery.
   serviceData Android listens for); QR code, open receive screen, or hotspot join
   are the wake paths.
 - Visible-to-everyone while receive is ON (contacts mode needs Google servers).
+- Receiving is Wi-Fi LAN (mDNS) only; the BLE receiver path (0xFEF3 advert + GATT socket)
+  is not implemented. Phones that leave Wi-Fi while the share sheet is open (Quick Share's
+  **Share with Apple devices** mode on some Pixel/Galaxy builds) can't see the Mac.
 - Play Services updates can break the reverse-engineered protocol without notice.
 
 Not affiliated with Google. Android and Quick Share are trademarks of Google LLC.
